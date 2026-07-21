@@ -9,6 +9,9 @@
     "db:push-force": "drizzle-kit push --force --config drizzle.config.ts"
   },
   "dependencies": {
+    "@discordjs/voice": "^0.17.0",
+    "libsodium-wrappers": "^0.7.15",
+    "opusscript": "^0.1.1",
     "discord.js": "^14.26.4",
     "dotenv": "^16.4.7",
     "drizzle-orm": "^0.45.2",

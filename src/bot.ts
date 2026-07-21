@@ -19,7 +19,7 @@
  */
 
 import { findBadWord } from "./badwords.js";
-// @discordjs/voice — disabled on Termux (ARM native bindings not available)
+import { joinVoiceChannel, VoiceConnectionStatus, entersState } from "@discordjs/voice";
 
 import {
   Client,
@@ -238,11 +238,35 @@ client.on("error", (err) => {
 // ══════════════════════════════════════════════════════════════════════════════
 //  AFK Voice — يخلي البوت واقف في روم صوتي معين طول ما هو شغال
 // ══════════════════════════════════════════════════════════════════════════════
-function joinAfkVoiceChannel(_guild: import("discord.js").Guild) {
-  // Voice channel disabled on Termux — @discordjs/voice requires native ARM bindings
-  logger.warn("AFK voice channel skipped — voice not supported on Termux/ARM");
-  return;
-  if (false) { const err = null;
+function joinAfkVoiceChannel(guild: import("discord.js").Guild) {
+  try {
+    const connection = joinVoiceChannel({
+      channelId: AFK_VOICE_CHANNEL_ID,
+      guildId: guild.id,
+      adapterCreator: guild.voiceAdapterCreator,
+      selfDeaf: true,
+      selfMute: true,
+    });
+
+    connection.on(VoiceConnectionStatus.Disconnected, async () => {
+      try {
+        await Promise.race([
+          entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
+          entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
+        ]);
+      } catch {
+        logger.warn("AFK voice connection dropped — rejoining");
+        connection.destroy();
+        joinAfkVoiceChannel(guild);
+      }
+    });
+
+    connection.on("error" as any, (err: unknown) => {
+      logger.error({ err }, "AFK voice connection error");
+    });
+
+    logger.info({ channelId: AFK_VOICE_CHANNEL_ID }, "Joined AFK voice channel");
+  } catch (err) {
     logger.error({ err }, "Failed to join AFK voice channel");
   }
 }
