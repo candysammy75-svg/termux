@@ -2971,6 +2971,28 @@ client.once(Events.ClientReady, async () => {
     new SlashCommandBuilder()
       .setName("mypoints")
       .setDescription("شوف رصيد نقاطك"),
+
+    // ── Fun commands ──────────────────────────────────────────────────────────
+    new SlashCommandBuilder()
+      .setName("tweet")
+      .setDescription("🐦 ولّد صورة تويت وهمية")
+      .addStringOption((o) => o.setName("content").setDescription("نص التويت").setRequired(true).setMaxLength(280))
+      .addUserOption((o)   => o.setName("user").setDescription("يوزر ديسكورد (اختياري)").setRequired(false))
+      .addStringOption((o) => o.setName("name").setDescription("اسم مخصص لو مش هتمنشن يوزر (اختياري)").setRequired(false)),
+
+    new SlashCommandBuilder()
+      .setName("ytcomment")
+      .setDescription("▶️ ولّد صورة كومنت يوتيوب وهمي")
+      .addStringOption((o) => o.setName("content").setDescription("نص الكومنت").setRequired(true).setMaxLength(500))
+      .addUserOption((o)   => o.setName("user").setDescription("يوزر ديسكورد (اختياري)").setRequired(false))
+      .addStringOption((o) => o.setName("name").setDescription("اسم مخصص (اختياري)").setRequired(false)),
+
+    new SlashCommandBuilder()
+      .setName("discordmsg")
+      .setDescription("💬 ولّد صورة رسالة ديسكورد وهمية")
+      .addStringOption((o) => o.setName("content").setDescription("نص الرسالة").setRequired(true).setMaxLength(500))
+      .addUserOption((o)   => o.setName("user").setDescription("يوزر ديسكورد (اختياري)").setRequired(false))
+      .addStringOption((o) => o.setName("name").setDescription("اسم مخصص (اختياري)").setRequired(false)),
   ];
 
   const rest = new REST({ version: "10" }).setToken(TOKEN);
@@ -3892,48 +3914,6 @@ client.on(Events.MessageCreate, async (message: Message) => {
       .setColor(0x5865f2)
       .setFooter({ text: `${entries.length} كلمة | !اضافة-تشفير كلمة | بديل  •  !حذف-تشفير كلمة`, iconURL: gIconURL });
     await channel.send({ embeds: [embed] }).catch(() => {});
-    return;
-  }
-
-  // ── !تويت / !يوتيوب / !ديسكورد — توليد صور سوشيال ميديا وهمية ──────────
-  // الصيغة: !تويت @يوزر محتوى   أو   !تويت اسم | محتوى
-  const SOCIAL_CMDS = ["!تويت", "!يوتيوب", "!ديسكورد"] as const;
-  const socialMatch = SOCIAL_CMDS.find(cmd => content.trim().startsWith(cmd));
-  if (socialMatch) {
-    const rawAfter = content.trim().slice(socialMatch.length).trim();
-    if (!rawAfter) {
-      const hint = socialMatch === "!تويت"
-        ? "!تويت @يوزر نص التويت\nأو: !تويت اسم | نص التويت"
-        : socialMatch === "!يوتيوب"
-        ? "!يوتيوب @يوزر نص الكومنت\nأو: !يوتيوب اسم | نص الكومنت"
-        : "!ديسكورد @يوزر نص الرسالة\nأو: !ديسكورد اسم | نص الرسالة";
-      await message.reply({ content: `❌ لازم تكتب المحتوى!\n\`\`\`\n${hint}\n\`\`\`` }).catch(() => {});
-      return;
-    }
-
-    const { displayName, handle, avatarUrl, content: msgContent } = parseSocialCmd(rawAfter, message.mentions.users);
-
-    if (!msgContent) {
-      await message.reply({ content: "❌ المحتوى فاضي! اكتب نص بعد الاسم." }).catch(() => {});
-      return;
-    }
-
-    try {
-      await channel.sendTyping().catch(() => {});
-      let imgBuf: Buffer;
-      if (socialMatch === "!تويت") {
-        imgBuf = await generateTweetImage(displayName, handle, avatarUrl, msgContent);
-      } else if (socialMatch === "!يوتيوب") {
-        imgBuf = await generateYTCommentImage(displayName, avatarUrl, msgContent);
-      } else {
-        imgBuf = await generateDiscordMsgImage(displayName, avatarUrl, msgContent);
-      }
-      const attachment = new AttachmentBuilder(imgBuf, { name: "social.png" });
-      await channel.send({ files: [attachment] });
-    } catch (err) {
-      logger.error({ err }, "Failed to generate social image");
-      await message.reply({ content: "❌ مشكلة في توليد الصورة. حاول تاني." }).catch(() => {});
-    }
     return;
   }
 
@@ -8445,6 +8425,49 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
           : `✅ تم خصم **${amount.toLocaleString()}** نقطة من <@${targetUser.id}>.`) +
         `\n💠 رصيده الحالي: **${newBalance.toLocaleString()}** نقطة.`,
     });
+    return;
+  }
+
+  // ── /tweet / /ytcomment / /discordmsg — Fun social image commands ────────
+  if (["tweet","ytcomment","discordmsg"].includes(interaction.commandName)) {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    const msgContent  = interaction.options.getString("content", true);
+    const targetUser  = interaction.options.getUser("user") ?? null;
+    const customName  = interaction.options.getString("name") ?? null;
+
+    let displayName: string, handle: string, avatarUrl: string | null;
+    if (targetUser) {
+      displayName = targetUser.displayName ?? targetUser.username;
+      handle      = targetUser.username.toLowerCase().replace(/\s+/g, "_");
+      avatarUrl   = targetUser.displayAvatarURL({ extension: "png", size: 256 });
+    } else if (customName) {
+      displayName = customName;
+      handle      = customName.toLowerCase().replace(/\s+/g, "_");
+      avatarUrl   = null;
+    } else {
+      displayName = interaction.user.displayName ?? interaction.user.username;
+      handle      = interaction.user.username.toLowerCase().replace(/\s+/g, "_");
+      avatarUrl   = interaction.user.displayAvatarURL({ extension: "png", size: 256 });
+    }
+
+    try {
+      let imgBuf: Buffer;
+      if (interaction.commandName === "tweet") {
+        imgBuf = await generateTweetImage(displayName, handle, avatarUrl, msgContent);
+      } else if (interaction.commandName === "ytcomment") {
+        imgBuf = await generateYTCommentImage(displayName, avatarUrl, msgContent);
+      } else {
+        imgBuf = await generateDiscordMsgImage(displayName, avatarUrl, msgContent);
+      }
+      const attachment = new AttachmentBuilder(imgBuf, { name: "social.png" });
+      // بيبعت الصورة للشانل مباشرة بدون نسب للأمر
+      await (interaction.channel as TextChannel).send({ files: [attachment] });
+      await interaction.deleteReply();
+    } catch (err) {
+      logger.error({ err }, "Failed to generate social image");
+      await interaction.editReply({ content: "❌ مشكلة في توليد الصورة. حاول تاني." });
+    }
     return;
   }
 
