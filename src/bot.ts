@@ -254,6 +254,7 @@ function joinAfkVoiceChannel(guild: import("discord.js").Guild) {
           entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
           entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
         ]);
+        // بيحاول يعمل reconnect لوحده
       } catch {
         logger.warn("AFK voice connection dropped — rejoining");
         connection.destroy();
@@ -1491,6 +1492,8 @@ type AuctionType = keyof typeof AUCTION_TYPES;
  */
 let auctionInfoMsgId:     string | null = null;
 let auctionScheduleMsgId: string | null = null;
+/** تاريخ آخر مرة بعتنا فيها رسالة الجدول (YYYY-MM-DD بتوقيت القاهرة) */
+let lastScheduleSentDate: string | null = null;
 
 // ── Mention Active Role ──────────────────────────────────────────────────────
 // NOTE: رول بيديه البوت لأصحاب الرومات اللي عندهم رصيد.
@@ -2067,19 +2070,17 @@ function dateToArabicDay(dateStr: string): string {
 }
 
 /**
- * بيبني إمبيد المواعيد المحجوزة — بيعرض كل الأيام من النهارده وما بعده
+ * بيبني إمبيد جدول المزادات — بيعرض كل الأيام من النهارده وما بعده
  * اللي عندها مواعيد (scheduled / active). الأيام بتتجمّع في سيكشنات.
  */
 async function buildScheduleEmbed(): Promise<EmbedBuilder> {
   const { date: today } = getCairoTime();
 
-  // جلب كل المواعيد النشطة أو المجدولة
   const allSchedules = await db
     .select()
     .from(auctionSchedulesTable)
     .where(inArray(auctionSchedulesTable.status, ["scheduled", "active"]));
 
-  // الأيام من النهارده وما بعده، مرتبة
   const upcoming = allSchedules
     .filter((s) => s.scheduledDate != null && s.scheduledDate >= today && s.scheduledHour != null)
     .sort((a, b) => {
@@ -2087,20 +2088,28 @@ async function buildScheduleEmbed(): Promise<EmbedBuilder> {
       return dc !== 0 ? dc : (a.scheduledHour ?? 0) - (b.scheduledHour ?? 0);
     });
 
-  const statusEmoji: Record<string, string> = { scheduled: "✅", active: "🔴" };
+  const statusEmoji: Record<string, string> = { scheduled: "🟢", active: "🔴" };
   const typeEmoji:   Record<string, string> = { everyone: "📢", here: "📣", offers: "🔔" };
 
+  const now = new Date().toLocaleTimeString("ar-EG", {
+    timeZone: "Africa/Cairo",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
   const embed = new EmbedBuilder()
-    .setTitle("📅 جدول مزادات Dragon $hop")
-    .setColor(0x5865f2)
-    .setFooter({ text: `آخر تحديث: ${new Date().toLocaleTimeString("ar-EG", { timeZone: "Africa/Cairo" })}` });
+    .setTitle("🗓️ جدول مزادات Dragon $hop")
+    .setColor(0xF4A000)
+    .setFooter({ text: `آخر تحديث • ${now}` });
 
   if (upcoming.length === 0) {
-    embed.setDescription("📭 لا توجد مزادات مجدولة حالياً.");
+    embed.setDescription(
+      "```\n  لا توجد مزادات مجدولة حالياً  \n```\n" +
+      "> 💡 لحجز مزاد اضغط **🔨 المزاد** في بانل الطلبيات"
+    );
     return embed;
   }
 
-  // تجميع حسب اليوم
   const byDate = new Map<string, typeof upcoming>();
   for (const s of upcoming) {
     const key = s.scheduledDate!;
@@ -2109,25 +2118,34 @@ async function buildScheduleEmbed(): Promise<EmbedBuilder> {
   }
 
   for (const [date, daySchedules] of byDate) {
-    const dayLabel = `${dateToArabicDay(date)} — ${date}${date === today ? " (اليوم)" : ""}`;
+    const isToday  = date === today;
+    const dayLabel = isToday
+      ? `📆 ${dateToArabicDay(date)} — اليوم`
+      : `📅 ${dateToArabicDay(date)} — ${date}`;
+
     const lines = daySchedules.map((s) => {
-      const st   = statusEmoji[s.status] ?? "❓";
-      const te   = typeEmoji[s.auctionType] ?? "";
-      const room = s.roomChannelId ? ` | <#${s.roomChannelId}>` : "";
-      const item = s.itemDescription ? ` | 📦 ${s.itemDescription}` : "";
-      return `${st} **${hourToLabel(s.scheduledHour ?? 0)}** ${te} <@${s.discordUserId}>${room}${item}`;
+      const st   = statusEmoji[s.status] ?? "⚪";
+      const te   = typeEmoji[s.auctionType] ?? "🔔";
+      const time = `\`${hourToLabel(s.scheduledHour ?? 0)}\``;
+      const room = s.roomChannelId ? ` • <#${s.roomChannelId}>` : "";
+      const item = s.itemDescription ? `\n> 📦 ${s.itemDescription}` : "";
+      return `${st} ${time} ${te} <@${s.discordUserId}>${room}${item}`;
     });
-    embed.addFields({ name: dayLabel, value: lines.join("\n"), inline: false });
+
+    embed.addFields({
+      name:   `${dayLabel}  ┈┈┈┈┈┈┈┈┈┈`,
+      value:  lines.join("\n\n"),
+      inline: false,
+    });
   }
 
   return embed;
 }
 
 /**
- * يحدّث لوحة جدول المزادات في شانل معلومات المزاد.
- * - withMention=true → يحذف الرسالة القديمة وينزل جديدة مع منشن @مزاد
- *   (لما يتحجز مزاد جديد).
- * - withMention=false → يعدّل الرسالة الموجودة بهدوء (تحديثات روتينية).
+ * يحدّث جدول المزادات في شانل معلومات المزاد.
+ * - withMention=true  → احذف القديمة وانزل جديدة مع منشن @مزاد (مزاد جديد اتحجز).
+ * - withMention=false → عدّل الموجودة صامتاً — وبعت جديدة بس مرة واحدة في اليوم.
  */
 async function refreshAuctionScheduleMsg(guild: Guild, withMention = false): Promise<void> {
   try {
@@ -2136,7 +2154,7 @@ async function refreshAuctionScheduleMsg(guild: Guild, withMention = false): Pro
 
     const embed = await buildScheduleEmbed();
 
-    // لو طلبنا منشن: احذف القديمة وانزل جديدة
+    // ── مزاد جديد اتحجز: احذف القديمة وانزل جديدة مع منشن ────────────────
     if (withMention) {
       if (auctionScheduleMsgId) {
         await infoCh.messages.delete(auctionScheduleMsgId).catch(() => {});
@@ -2147,10 +2165,11 @@ async function refreshAuctionScheduleMsg(guild: Guild, withMention = false): Pro
         embeds:  [embed],
       });
       auctionScheduleMsgId = sent.id;
+      lastScheduleSentDate = getCairoTime().date;
       return;
     }
 
-    // تحديث صامت — عدّل الموجودة أو انزل جديدة بدون منشن
+    // ── تحديث صامت (كل 5 دقايق): عدّل الموجودة فقط ─────────────────────
     if (auctionScheduleMsgId) {
       const existing = await infoCh.messages.fetch(auctionScheduleMsgId).catch(() => null);
       if (existing) {
@@ -2160,8 +2179,13 @@ async function refreshAuctionScheduleMsg(guild: Guild, withMention = false): Pro
       auctionScheduleMsgId = null;
     }
 
+    // مفيش رسالة موجودة → ابعت جديدة بس مرة واحدة في اليوم
+    const today = getCairoTime().date;
+    if (lastScheduleSentDate === today) return;
+
     const sent = await infoCh.send({ embeds: [embed] });
     auctionScheduleMsgId = sent.id;
+    lastScheduleSentDate = today;
   } catch (err) {
     logger.error({ err }, "refreshAuctionScheduleMsg error");
   }
@@ -2659,7 +2683,7 @@ client.once(Events.ClientReady, async () => {
             if (!auctionInfoMsgId && m.embeds.some((e) => e.title?.includes("كيف يعمل"))) {
               auctionInfoMsgId = m.id;
             }
-            if (!auctionScheduleMsgId && m.embeds.some((e) => e.title?.includes("المواعيد المحجوزة"))) {
+            if (!auctionScheduleMsgId && m.embeds.some((e) => e.title?.includes("جدول مزادات"))) {
               auctionScheduleMsgId = m.id;
             }
             if (auctionInfoMsgId && auctionScheduleMsgId) break;
