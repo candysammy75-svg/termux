@@ -20,6 +20,7 @@
 
 import { findBadWord } from "./badwords.js";
 import { joinVoiceChannel, VoiceConnectionStatus, entersState } from "@discordjs/voice";
+import { createCanvas, loadImage } from "@napi-rs/canvas";
 
 import {
   Client,
@@ -1289,6 +1290,236 @@ function findUnencryptedWord(text: string): string | null {
     if (text.includes(word)) return word;
   }
   return null;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  Fun Commands — توليد صور سوشيال ميديا وهمية
+// ══════════════════════════════════════════════════════════════════════════════
+
+/** كسّر النص على سطور حسب العرض */
+function wrapText(ctx: ReturnType<typeof createCanvas>["getContext"] extends (type: "2d") => infer R ? R : never, text: string, maxWidth: number): string[] {
+  const words = text.split(" ");
+  const lines: string[] = [];
+  let current = "";
+  for (const word of words) {
+    const test = current ? `${current} ${word}` : word;
+    if (ctx.measureText(test).width > maxWidth && current) {
+      lines.push(current);
+      current = word;
+    } else {
+      current = test;
+    }
+  }
+  if (current) lines.push(current);
+  return lines.length ? lines : [" "];
+}
+
+/** ارسم أفاتار دائري افتراضي بحرف أول */
+function drawDefaultAvatar(ctx: any, name: string, x: number, y: number, r: number) {
+  const COLORS = ["#7289da", "#43b581", "#faa61a", "#f04747", "#593695", "#1da1f2"];
+  ctx.fillStyle = COLORS[name.charCodeAt(0) % COLORS.length] ?? "#7289da";
+  ctx.beginPath();
+  ctx.arc(x + r, y + r, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#ffffff";
+  ctx.font = `bold ${Math.round(r * 0.95)}px sans-serif`;
+  ctx.textAlign = "center";
+  ctx.fillText((name[0] ?? "?").toUpperCase(), x + r, y + r + Math.round(r * 0.35));
+  ctx.textAlign = "left";
+}
+
+/** ارسم أفاتار دائري من صورة */
+async function drawCircleAvatar(ctx: any, url: string, x: number, y: number, r: number) {
+  try {
+    const res  = await fetch(url);
+    const buf  = Buffer.from(await res.arrayBuffer());
+    const img  = await loadImage(buf);
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(x + r, y + r, r, 0, Math.PI * 2);
+    ctx.closePath();
+    ctx.clip();
+    ctx.drawImage(img, x, y, r * 2, r * 2);
+    ctx.restore();
+    return true;
+  } catch { return false; }
+}
+
+/** توليد صورة تويت */
+async function generateTweetImage(
+  displayName: string, handle: string,
+  avatarUrl: string | null, content: string
+): Promise<Buffer> {
+  const W = 620, PAD = 22, AVR = 24;
+  const CONTENT_X = PAD;
+  const CONTENT_W = W - PAD * 2;
+
+  // قياس ارتفاع النص أولاً
+  const tmp = createCanvas(W, 10); const tc = tmp.getContext("2d");
+  tc.font = "17px sans-serif";
+  const lines = wrapText(tc as any, content, CONTENT_W);
+  const H = Math.max(180, PAD + AVR * 2 + 18 + lines.length * 24 + 60);
+
+  const canvas = createCanvas(W, H); const ctx = canvas.getContext("2d");
+
+  // خلفية سوداء + حدود
+  ctx.fillStyle = "#000000"; ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = "#2f3336"; ctx.lineWidth = 1;
+  ctx.strokeRect(0.5, 0.5, W - 1, H - 1);
+
+  // أفاتار
+  if (avatarUrl) {
+    const ok = await drawCircleAvatar(ctx as any, avatarUrl, PAD, PAD, AVR);
+    if (!ok) drawDefaultAvatar(ctx as any, displayName, PAD, PAD, AVR);
+  } else {
+    drawDefaultAvatar(ctx as any, displayName, PAD, PAD, AVR);
+  }
+
+  // X logo
+  ctx.fillStyle = "#e7e9ea"; ctx.font = "bold 22px sans-serif";
+  ctx.textAlign = "right"; ctx.fillText("𝕏", W - PAD, PAD + 18); ctx.textAlign = "left";
+
+  // اسم + هاندل
+  const nameX = PAD + AVR * 2 + 10;
+  ctx.fillStyle = "#e7e9ea"; ctx.font = "bold 15px sans-serif";
+  ctx.fillText(displayName, nameX, PAD + 17);
+  ctx.fillStyle = "#536471"; ctx.font = "14px sans-serif";
+  ctx.fillText(`@${handle}`, nameX, PAD + 35);
+
+  // نص التويت
+  ctx.fillStyle = "#e7e9ea"; ctx.font = "17px sans-serif";
+  let ty = PAD + AVR * 2 + 22;
+  for (const line of lines) { ctx.fillText(line, PAD, ty); ty += 24; }
+
+  // خط فاصل
+  ctx.strokeStyle = "#2f3336"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(PAD, H - 44); ctx.lineTo(W - PAD, H - 44); ctx.stroke();
+
+  // تفاعلات وهمية
+  const rn = () => (Math.floor(Math.random() * 9999) + 1).toLocaleString();
+  ctx.fillStyle = "#536471"; ctx.font = "13px sans-serif";
+  ctx.fillText(`💬 ${rn()}`, PAD,       H - 20);
+  ctx.fillText(`🔁 ${rn()}`, PAD + 110, H - 20);
+  ctx.fillText(`❤️ ${rn()}`, PAD + 220, H - 20);
+  ctx.fillText(`📊 ${rn()}`, PAD + 340, H - 20);
+
+  return canvas.toBuffer("image/png");
+}
+
+/** توليد صورة كومنت يوتيوب */
+async function generateYTCommentImage(
+  username: string, avatarUrl: string | null, content: string
+): Promise<Buffer> {
+  const W = 620, PAD = 20, AVR = 22;
+  const TX = PAD + AVR * 2 + 14;
+  const TW = W - TX - PAD;
+
+  const tmp = createCanvas(W, 10); const tc = tmp.getContext("2d");
+  tc.font = "15px sans-serif";
+  const lines = wrapText(tc as any, content, TW);
+  const H = Math.max(100, PAD * 2 + 26 + lines.length * 22 + 34);
+
+  const canvas = createCanvas(W, H); const ctx = canvas.getContext("2d");
+
+  // خلفية يوتيوب داكنة
+  ctx.fillStyle = "#0f0f0f"; ctx.fillRect(0, 0, W, H);
+
+  // أفاتار
+  if (avatarUrl) {
+    const ok = await drawCircleAvatar(ctx as any, avatarUrl, PAD, PAD, AVR);
+    if (!ok) drawDefaultAvatar(ctx as any, username, PAD, PAD, AVR);
+  } else {
+    drawDefaultAvatar(ctx as any, username, PAD, PAD, AVR);
+  }
+
+  // اسم + وقت
+  ctx.fillStyle = "#f1f1f1"; ctx.font = "bold 14px sans-serif";
+  ctx.fillText(username, TX, PAD + 16);
+  ctx.fillStyle = "#717171"; ctx.font = "12px sans-serif";
+  ctx.fillText("منذ لحظة", TX + ctx.measureText(username).width + 8, PAD + 16);
+
+  // نص
+  ctx.fillStyle = "#f1f1f1"; ctx.font = "15px sans-serif";
+  let ty = PAD + 34;
+  for (const line of lines) { ctx.fillText(line, TX, ty); ty += 22; }
+
+  // لايك وهمي
+  const likes = (Math.floor(Math.random() * 9999) + 1).toLocaleString();
+  ctx.fillStyle = "#aaaaaa"; ctx.font = "13px sans-serif";
+  ctx.fillText(`👍 ${likes}   👎   رد`, TX, ty + 8);
+
+  return canvas.toBuffer("image/png");
+}
+
+/** توليد صورة رسالة ديسكورد */
+async function generateDiscordMsgImage(
+  username: string, avatarUrl: string | null, content: string
+): Promise<Buffer> {
+  const W = 620, PAD = 16, AVR = 20;
+  const TX = PAD + AVR * 2 + 16;
+  const TW = W - TX - PAD;
+
+  const tmp = createCanvas(W, 10); const tc = tmp.getContext("2d");
+  tc.font = "15px sans-serif";
+  const lines = wrapText(tc as any, content, TW);
+  const H = Math.max(80, PAD * 2 + 22 + lines.length * 22 + 14);
+
+  const canvas = createCanvas(W, H); const ctx = canvas.getContext("2d");
+
+  ctx.fillStyle = "#313338"; ctx.fillRect(0, 0, W, H);
+
+  // أفاتار
+  if (avatarUrl) {
+    const ok = await drawCircleAvatar(ctx as any, avatarUrl, PAD, PAD, AVR);
+    if (!ok) drawDefaultAvatar(ctx as any, username, PAD, PAD, AVR);
+  } else {
+    drawDefaultAvatar(ctx as any, username, PAD, PAD, AVR);
+  }
+
+  // اسم + وقت
+  ctx.fillStyle = "#00aff4"; ctx.font = "bold 15px sans-serif";
+  ctx.fillText(username, TX, PAD + 16);
+  const now = new Date();
+  const ts  = `اليوم ${now.getHours().toString().padStart(2,"0")}:${now.getMinutes().toString().padStart(2,"0")}`;
+  ctx.fillStyle = "#949ba4"; ctx.font = "11px sans-serif";
+  ctx.fillText(ts, TX + ctx.measureText(username).width + 8, PAD + 15);
+
+  // نص
+  ctx.fillStyle = "#dbdee1"; ctx.font = "15px sans-serif";
+  let ty = PAD + 32;
+  for (const line of lines) { ctx.fillText(line, TX, ty); ty += 22; }
+
+  return canvas.toBuffer("image/png");
+}
+
+/**
+ * بارس أمر سوشيال ميديا:
+ *   !تويت @mention محتوى   → يوزر المنشن + محتوى
+ *   !تويت اسم | محتوى      → اسم مخصص + محتوى
+ */
+function parseSocialCmd(rawAfterCmd: string, mentions: import("discord.js").Collection<string, import("discord.js").User>) {
+  const mentionedUser = mentions.first() ?? null;
+  let displayName: string, handle: string, avatarUrl: string | null, content: string;
+
+  if (mentionedUser) {
+    displayName = mentionedUser.displayName ?? mentionedUser.username;
+    handle      = mentionedUser.username.toLowerCase().replace(/\s+/g, "_");
+    avatarUrl   = mentionedUser.displayAvatarURL({ extension: "png", size: 256 });
+    content     = rawAfterCmd.replace(/<@!?\d+>/g, "").trim();
+  } else if (rawAfterCmd.includes("|")) {
+    const idx   = rawAfterCmd.indexOf("|");
+    displayName = rawAfterCmd.slice(0, idx).trim() || "مجهول";
+    handle      = displayName.toLowerCase().replace(/\s+/g, "_");
+    avatarUrl   = null;
+    content     = rawAfterCmd.slice(idx + 1).trim();
+  } else {
+    displayName = "مجهول";
+    handle      = "unknown";
+    avatarUrl   = null;
+    content     = rawAfterCmd.trim();
+  }
+
+  return { displayName, handle, avatarUrl, content };
 }
 
 /** الإمبيد بتاع أمر التشفير مع زرار فتح المودال */
@@ -3564,6 +3795,48 @@ client.on(Events.MessageCreate, async (message: Message) => {
   if (content.trim() === "!تشفير") {
     const { embed, row } = buildEncryptEmbed(message.guild);
     await channel.send({ embeds: [embed], components: [row] }).catch(() => {});
+    return;
+  }
+
+  // ── !تويت / !يوتيوب / !ديسكورد — توليد صور سوشيال ميديا وهمية ──────────
+  // الصيغة: !تويت @يوزر محتوى   أو   !تويت اسم | محتوى
+  const SOCIAL_CMDS = ["!تويت", "!يوتيوب", "!ديسكورد"] as const;
+  const socialMatch = SOCIAL_CMDS.find(cmd => content.trim().startsWith(cmd));
+  if (socialMatch) {
+    const rawAfter = content.trim().slice(socialMatch.length).trim();
+    if (!rawAfter) {
+      const hint = socialMatch === "!تويت"
+        ? "!تويت @يوزر نص التويت\nأو: !تويت اسم | نص التويت"
+        : socialMatch === "!يوتيوب"
+        ? "!يوتيوب @يوزر نص الكومنت\nأو: !يوتيوب اسم | نص الكومنت"
+        : "!ديسكورد @يوزر نص الرسالة\nأو: !ديسكورد اسم | نص الرسالة";
+      await message.reply({ content: `❌ لازم تكتب المحتوى!\n\`\`\`\n${hint}\n\`\`\`` }).catch(() => {});
+      return;
+    }
+
+    const { displayName, handle, avatarUrl, content: msgContent } = parseSocialCmd(rawAfter, message.mentions.users);
+
+    if (!msgContent) {
+      await message.reply({ content: "❌ المحتوى فاضي! اكتب نص بعد الاسم." }).catch(() => {});
+      return;
+    }
+
+    try {
+      await channel.sendTyping().catch(() => {});
+      let imgBuf: Buffer;
+      if (socialMatch === "!تويت") {
+        imgBuf = await generateTweetImage(displayName, handle, avatarUrl, msgContent);
+      } else if (socialMatch === "!يوتيوب") {
+        imgBuf = await generateYTCommentImage(displayName, avatarUrl, msgContent);
+      } else {
+        imgBuf = await generateDiscordMsgImage(displayName, avatarUrl, msgContent);
+      }
+      const attachment = new AttachmentBuilder(imgBuf, { name: "social.png" });
+      await channel.send({ files: [attachment] });
+    } catch (err) {
+      logger.error({ err }, "Failed to generate social image");
+      await message.reply({ content: "❌ مشكلة في توليد الصورة. حاول تاني." }).catch(() => {});
+    }
     return;
   }
 
