@@ -1246,6 +1246,89 @@ function encodeArabicFranco(text: string): string {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+//  تشفير الرسائل اليدوي — قاموس الكلمات وأدوات التشفير
+// ══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * قاموس الكلمات المحتاجة تشفير في رومات المتاجر.
+ * صاحب المتجر مطلوب منه يستخدم !تشفير قبل ما ينشر أي كلمة من دول.
+ */
+const ENCRYPT_DICT: Record<string, string> = {
+  "كريدت":   "كريــ،ــدت",
+  "نيترو":   "نيتر9",
+  "فيزا":    "فيــ،ــزا",
+  "عملة":    "عمــ،ــلة",
+  "بوت":     "ب9ت",
+  "كريبتو":  "كريـ،ــبتو",
+  "روبوكس":  "ر9بوكس",
+  "ريزر":    "ريــ،ــزر",
+  "بروجكت":  "بر9جكت",
+  "بروجيكت": "بر9جيكت",
+  "خاص":     "خـ1ـص",
+  "كمية":    "كمــ،ــية",
+  "برمجة":   "برمـ،ـجة",
+  "طرق":     "طرـ،،ـق",
+  "مطلوب":   "مطل9ب",
+  "سيلف":    "سيــ،ــلف",
+  "كاش":     "ك1ش",
+  "سيرفر":   "سيــ،ــرفر",
+};
+
+/** بيشفر رسالة بناءً على ENCRYPT_DICT — بيستبدل كل كلمة محظورة بنسختها المشفرة */
+function encryptMessage(text: string): string {
+  let result = text;
+  for (const [word, replacement] of Object.entries(ENCRYPT_DICT)) {
+    result = result.replace(new RegExp(word, "g"), replacement);
+  }
+  return result;
+}
+
+/** بيرجع أول كلمة غير مشفرة في الرسالة، أو null لو مفيش */
+function findUnencryptedWord(text: string): string | null {
+  for (const word of Object.keys(ENCRYPT_DICT)) {
+    if (text.includes(word)) return word;
+  }
+  return null;
+}
+
+/** الإمبيد بتاع أمر التشفير مع زرار فتح المودال */
+function buildEncryptEmbed(guild?: Guild | null): { embed: EmbedBuilder; row: ActionRowBuilder<ButtonBuilder> } {
+  const gIconURL = guild?.iconURL({ extension: "png", size: 256 }) ?? undefined;
+  const DIV = "ـﮩ════════════════ﮩـ";
+  const embed = new EmbedBuilder()
+    .setAuthor({ name: "Dragon $hop", iconURL: gIconURL })
+    .setTitle("🔒 تشفير الرسائل")
+    .setDescription(
+      `> ${DIV}
+
+` +
+      `لحماية متجرك **استخدم التشفير** قبل ما تنشر أي رسالة.
+
+` +
+      `**طريقة الاستخدام:**
+` +
+      `اضغط الزرار ← اكتب رسالتك ← هتوصلك رسالة **مخفية** بالنص المشفر
+` +
+      `ثم انشر النص المشفر في متجرك بشكل طبيعي ✅
+
+` +
+      `> ${DIV}`
+    )
+    .setColor(0x5865F2)
+    .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p", iconURL: gIconURL });
+
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId("encrypt_btn")
+      .setLabel("تشفير رسالة")
+      .setEmoji("🔒")
+      .setStyle(ButtonStyle.Primary),
+  );
+
+  return { embed, row };
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 //  Helpers — أدوات مساعدة
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -3473,6 +3556,25 @@ client.on(Events.MessageCreate, async (message: Message) => {
   const content  = message.content;
   const channel  = message.channel as TextChannel;
 
+  // ── !تشفير — إرسال إمبيد التشفير اليدوي ───────────────────────────────────
+  // يشتغل بس لو صاحب المتجر أو شريكه في متجره أو متجر هو شريك فيه.
+  if (content.trim() === "!تشفير") {
+    const encRoom = await db
+      .select()
+      .from(purchasesTable)
+      .where(and(eq(purchasesTable.discordRoomId, channel.id), eq(purchasesTable.status, "completed")))
+      .then((rows) => rows[0] ?? null);
+    const callerIsOwner   = encRoom?.ownerId === userId;
+    const callerIsPartner = encRoom?.partnerDiscordUserId === userId;
+    if (encRoom && (callerIsOwner || callerIsPartner)) {
+      const { embed, row } = buildEncryptEmbed(message.guild);
+      await channel.send({ embeds: [embed], components: [row] }).catch(() => {});
+    } else {
+      await message.reply({ content: "❌ هذا الأمر يعمل فقط في متجرك أو متجر أنت شريك فيه." }).catch(() => {});
+    }
+    return;
+  }
+
   // ── !منشن — عرض رصيد المنشنات ────────────────────────────────────────────
   // الصيغة: !منشن          → رصيد المرسل نفسه
   //         !منشن @يوزر   → رصيد يوزر تاني
@@ -3964,10 +4066,54 @@ client.on(Events.MessageCreate, async (message: Message) => {
       }
     }
 
-    // ── تشفير رسائل صاحب المتجر + زرار "طلب المنتج" ──────────────────────
-    // NOTE: أي رسالة من الأونر/الشريك في الروم (بعد ما تعدي كل المودريشن
-    //       فوق) بتتمسح وتتبعت تاني عن طريق webhook بنفس الاسم والصورة،
-    //       بس بمحتوى متشفر (encodeArabicFranco)، وتحتها زرار طلب المنتج.
+    // ── تحذير عدم التشفير: لو صاحب المتجر/شريكه كتب كلمة محتاجة تشفير ────────
+    if ((isRoomOwner || isRoomPartner) && message.content) {
+      const unencWord = findUnencryptedWord(message.content);
+      if (unencWord) {
+        const newWarnCount = (roomPurchase!.roomWarningCount ?? 0) + 1;
+        await db
+          .update(purchasesTable)
+          .set({
+            roomWarningCount:  newWarnCount,
+            isRoomDeactivated: roomPurchase!.isRoomDeactivated || newWarnCount >= 3,
+          })
+          .where(eq(purchasesTable.id, roomPurchase!.id));
+
+        const ordinals: Record<number, string> = { 1: "أول", 2: "ثاني", 3: "ثالث" };
+        const ordinal  = ordinals[newWarnCount] ?? `${newWarnCount}`;
+        const gIconURL = message.guild?.iconURL({ extension: "png", size: 256 }) ?? undefined;
+        const DIV_W    = "ـﮩ════════════════ﮩـ";
+
+        const encWarnEmbed = new EmbedBuilder()
+          .setAuthor({ name: "Dragon $hop", iconURL: gIconURL })
+          .setTitle("⚠️ تحذير — عدم تشفير")
+          .setDescription(
+            `<@${userId}>
+> ${DIV_W}
+
+` +
+            `بلعت **${ordinal}** تحذير
+` +
+            `**السبب :** عدم تشفير كلمه **${unencWord}**
+
+` +
+            `لا تنسى التشفير المره القادمه <:DFC_Angry_jerry:1524625451270803598>
+` +
+            `و تقدر تشيل التحذير من هنا <#1526073004952518707>
+
+` +
+            `> **عدد التحذيرات :** ${newWarnCount} / 3
+` +
+            `> ${DIV_W}`
+          )
+          .setColor(0xff4444)
+          .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p", iconURL: gIconURL });
+
+        await channel.send({ embeds: [encWarnEmbed] }).catch(() => {});
+      }
+    }
+
+    // ── زرار "طلب المنتج" بعد كل رسالة من الأونر أو الشريك ─────────────────
     if (isRoomOwner || isRoomPartner) {
       const requestProductRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
@@ -3976,33 +4122,7 @@ client.on(Events.MessageCreate, async (message: Message) => {
           .setLabel("طلب المنتج")
           .setStyle(ButtonStyle.Success),
       );
-
-      const encodedContent = message.content ? encodeArabicFranco(message.content) : "";
-      const attachmentUrls = message.attachments.map((a) => a.url);
-      const webhook = await getOrCreateStoreWebhook(channel);
-
-      if (webhook && (encodedContent || attachmentUrls.length > 0)) {
-        const relayed = await webhook.send({
-          username:  message.member?.displayName ?? message.author.username,
-          avatarURL: message.author.displayAvatarURL(),
-          content:   encodedContent || undefined,
-          files:     attachmentUrls.length ? attachmentUrls : undefined,
-          components: [requestProductRow],
-        }).catch((err) => {
-          logger.error({ err, channelId: channel.id }, "Failed to relay store message via webhook");
-          return null;
-        });
-
-        if (relayed) {
-          await message.delete().catch(() => {});
-        } else {
-          // فشل الـ webhook — سيب الرسالة الأصلية وحط الزرار تحتها بدل ما تضيع
-          await message.reply({ components: [requestProductRow] }).catch(() => {});
-        }
-      } else {
-        // مفيش webhook أو رسالة فاضية (زي رسائل الستيكرز) — رد عادي بالزرار
-        await message.reply({ components: [requestProductRow] }).catch(() => {});
-      }
+      await message.reply({ components: [requestProductRow] }).catch(() => {});
     }
   }
 
@@ -8294,6 +8414,55 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
     await interaction.editReply({
       content: `✅ بدأ النشر التلقائي في متجرك! كل 6 ساعات لمدة **${days}** ${days === 1 ? "يوم" : "أيام"}.`,
     });
+    return;
+  }
+
+  // ── encrypt_btn — فتح مودال التشفير ────────────────────────────────────────
+  if (interaction.isButton() && interaction.customId === "encrypt_btn") {
+    const modal = new ModalBuilder()
+      .setCustomId("encrypt_modal")
+      .setTitle("🔒 تشفير الرسالة");
+
+    const msgInput = new TextInputBuilder()
+      .setCustomId("encrypt_msg")
+      .setLabel("اكتب الرسالة")
+      .setStyle(TextInputStyle.Paragraph)
+      .setPlaceholder("اكتب رسالتك هنا وهتتشفر تلقائياً...")
+      .setRequired(true)
+      .setMinLength(1)
+      .setMaxLength(2000);
+
+    modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(msgInput));
+    await interaction.showModal(modal);
+    return;
+  }
+
+  // ── encrypt_modal — رد بالنص المشفر كرسالة مخفية ────────────────────────
+  if (interaction.isModalSubmit() && interaction.customId === "encrypt_modal") {
+    const originalText  = interaction.fields.getTextInputValue("encrypt_msg");
+    const encryptedText = encryptMessage(originalText);
+
+    const gIconURL = interaction.guild?.iconURL({ extension: "png", size: 256 }) ?? undefined;
+    const DIV_E    = "ـﮩ════════════════ﮩـ";
+
+    const encResultEmbed = new EmbedBuilder()
+      .setAuthor({ name: "Dragon $hop", iconURL: gIconURL })
+      .setTitle("🔒 رسالتك المشفرة")
+      .setDescription(
+        `> ${DIV_E}
+
+` +
+        `\`\`\`
+${encryptedText}
+\`\`\`
+
+` +
+        `> ${DIV_E}`
+      )
+      .setColor(0x5865F2)
+      .setFooter({ text: "انسخ النص المشفر وانشره في متجرك ✅", iconURL: gIconURL });
+
+    await interaction.reply({ embeds: [encResultEmbed], flags: MessageFlags.Ephemeral });
     return;
   }
 
