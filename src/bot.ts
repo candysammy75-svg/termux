@@ -1321,7 +1321,7 @@ function buildEncryptEmbed(guild?: Guild | null): { embed: EmbedBuilder; row: Ac
     new ButtonBuilder()
       .setCustomId("encrypt_btn")
       .setLabel("تشفير رسالة")
-      .setEmoji("🔒")
+      .setEmoji({ id: "1499748971705536634", name: "crabrave", animated: true })
       .setStyle(ButtonStyle.Primary),
   );
 
