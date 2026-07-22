@@ -2719,6 +2719,10 @@ client.once(Events.ClientReady, async () => {
 
   const rest = new REST({ version: "10" }).setToken(TOKEN);
   try {
+    // ── امسح أي global slash commands قديمة من تطبيقات سابقة ────────────
+    await rest.put(Routes.applicationCommands(client.user!.id), { body: [] });
+
+    // ── سجّل الأوامر الحالية كـ guild commands (أسرع وأكثر أماناً) ────────
     await rest.put(
       Routes.applicationGuildCommands(client.user!.id, GUILD_ID),
       { body: commands.map((c) => c.toJSON()) }
@@ -3564,7 +3568,7 @@ client.on(Events.MessageCreate, async (message: Message) => {
       .from(purchasesTable)
       .where(and(eq(purchasesTable.discordRoomId, channel.id), eq(purchasesTable.status, "completed")))
       .then((rows) => rows[0] ?? null);
-    const callerIsOwner   = encRoom?.ownerId === userId;
+    const callerIsOwner   = encRoom?.discordUserId === userId;
     const callerIsPartner = encRoom?.partnerDiscordUserId === userId;
     if (encRoom && (callerIsOwner || callerIsPartner)) {
       const { embed, row } = buildEncryptEmbed(message.guild);
