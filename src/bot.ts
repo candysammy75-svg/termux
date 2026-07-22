@@ -3561,21 +3561,9 @@ client.on(Events.MessageCreate, async (message: Message) => {
   const channel  = message.channel as TextChannel;
 
   // ── !تشفير — إرسال إمبيد التشفير اليدوي ───────────────────────────────────
-  // يشتغل بس لو صاحب المتجر أو شريكه في متجره أو متجر هو شريك فيه.
   if (content.trim() === "!تشفير") {
-    const encRoom = await db
-      .select()
-      .from(purchasesTable)
-      .where(and(eq(purchasesTable.discordRoomId, channel.id), eq(purchasesTable.status, "completed")))
-      .then((rows) => rows[0] ?? null);
-    const callerIsOwner   = encRoom?.discordUserId === userId;
-    const callerIsPartner = encRoom?.partnerDiscordUserId === userId;
-    if (encRoom && (callerIsOwner || callerIsPartner)) {
-      const { embed, row } = buildEncryptEmbed(message.guild);
-      await channel.send({ embeds: [embed], components: [row] }).catch(() => {});
-    } else {
-      await message.reply({ content: "❌ هذا الأمر يعمل فقط في متجرك أو متجر أنت شريك فيه." }).catch(() => {});
-    }
+    const { embed, row } = buildEncryptEmbed(message.guild);
+    await channel.send({ embeds: [embed], components: [row] }).catch(() => {});
     return;
   }
 
@@ -8472,6 +8460,8 @@ ${encryptedText}
 
   } catch (err) {
     logger.error({ err, interactionId: interaction.id }, "Unhandled error in InteractionCreate");
+    // لو الخطأ هو "Interaction has already been acknowledged" — ما فيش حاجة نعملها
+    if ((err as any)?.code === 40060) return;
     // حاول تبلّغ المستخدم لو الـ interaction لسه ما اتردّش
     try {
       if (interaction.isRepliable()) {
