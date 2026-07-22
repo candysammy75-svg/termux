@@ -64,6 +64,7 @@ import {
   promoRedemptionsTable,
   userPointsTable,
   productRequestsTable,
+  encryptWordsTable,
 } from "./db.js";
 import { eq, and, ne, lt, isNull, sql, inArray } from "drizzle-orm";
 import { logger } from "./logger.js";
@@ -1251,10 +1252,13 @@ function encodeArabicFranco(text: string): string {
 // ══════════════════════════════════════════════════════════════════════════════
 
 /**
- * قاموس الكلمات المحتاجة تشفير في رومات المتاجر.
- * صاحب المتجر مطلوب منه يستخدم !تشفير قبل ما ينشر أي كلمة من دول.
+ * قاموس الكلمات المحتاجة تشفير — بيتحمل من DB ويتحدث ديناميكياً.
+ * الكلمات الافتراضية بتتنزل في DB مرة واحدة لو الجدول فاضي.
  */
-const ENCRYPT_DICT: Record<string, string> = {
+let encryptDict: Record<string, string> = {};
+
+/** الكلمات الافتراضية للـ seed */
+const DEFAULT_ENCRYPT_WORDS: Record<string, string> = {
   "كريدت":   "كريــ،ــدت",
   "نيترو":   "نيتر9",
   "فيزا":    "فيــ،ــزا",
@@ -1275,10 +1279,28 @@ const ENCRYPT_DICT: Record<string, string> = {
   "سيرفر":   "سيــ،ــرفر",
 };
 
-/** بيشفر رسالة بناءً على ENCRYPT_DICT — بيستبدل كل كلمة محظورة بنسختها المشفرة */
+/** بيحمّل قاموس التشفير من DB — لو فاضي بينزّل الكلمات الافتراضية */
+async function loadEncryptDict(): Promise<void> {
+  const rows = await db.select().from(encryptWordsTable);
+  if (rows.length === 0) {
+    // seed الكلمات الافتراضية
+    await db.insert(encryptWordsTable).values(
+      Object.entries(DEFAULT_ENCRYPT_WORDS).map(([word, replacement]) => ({
+        word, replacement, addedBy: "system",
+      }))
+    );
+    encryptDict = { ...DEFAULT_ENCRYPT_WORDS };
+    logger.info({ count: Object.keys(encryptDict).length }, "Encrypt dict seeded from defaults");
+  } else {
+    encryptDict = Object.fromEntries(rows.map((r) => [r.word, r.replacement]));
+    logger.info({ count: rows.length }, "Encrypt dict loaded from DB");
+  }
+}
+
+/** بيشفر رسالة بناءً على encryptDict — بيستبدل كل كلمة بنسختها المشفرة */
 function encryptMessage(text: string): string {
   let result = text;
-  for (const [word, replacement] of Object.entries(ENCRYPT_DICT)) {
+  for (const [word, replacement] of Object.entries(encryptDict)) {
     result = result.replace(new RegExp(word, "g"), replacement);
   }
   return result;
@@ -1286,7 +1308,7 @@ function encryptMessage(text: string): string {
 
 /** بيرجع أول كلمة غير مشفرة في الرسالة، أو null لو مفيش */
 function findUnencryptedWord(text: string): string | null {
-  for (const word of Object.keys(ENCRYPT_DICT)) {
+  for (const word of Object.keys(encryptDict)) {
     if (text.includes(word)) return word;
   }
   return null;
@@ -2772,6 +2794,9 @@ client.once(Events.ClientReady, async () => {
   try {
   logger.info({ username: client.user?.tag }, "Discord bot is ready");
 
+  // ── تحميل قاموس التشفير من DB ─────────────────────────────────────────────
+  await loadEncryptDict();
+
   // ── تسجيل Slash Commands ──────────────────────────────────────────────────
   // NOTE: الأوامر بتتسجل على مستوى السيرفر (Guild Commands) مش Global.
   //       ده بيخليها تظهر فوراً بدون الانتظار 1 ساعة اللي بياخدها Global Commands.
@@ -3795,6 +3820,78 @@ client.on(Events.MessageCreate, async (message: Message) => {
   if (content.trim() === "!تشفير") {
     const { embed, row } = buildEncryptEmbed(message.guild);
     await channel.send({ embeds: [embed], components: [row] }).catch(() => {});
+    return;
+  }
+
+  // ── !اضافة-تشفير — إضافة كلمة للقاموس (أونر فقط) ──────────────────────────
+  // الصيغة: !اضافة-تشفير كلمة | بديلها
+  if (content.trim().startsWith("!اضافة-تشفير")) {
+    if (userId !== OWNER_ID) {
+      await message.reply({ content: "❌ هذا الأمر للأونر فقط." }).catch(() => {});
+      return;
+    }
+    const raw = content.trim().slice("!اضافة-تشفير".length).trim();
+    if (!raw.includes("|")) {
+      await message.reply({ content: "❌ الصيغة الصحيحة:\n`!اضافة-تشفير كلمة | بديلها`" }).catch(() => {});
+      return;
+    }
+    const sepIdx      = raw.indexOf("|");
+    const word        = raw.slice(0, sepIdx).trim();
+    const replacement = raw.slice(sepIdx + 1).trim();
+    if (!word || !replacement) {
+      await message.reply({ content: "❌ الكلمة أو البديل فاضي!" }).catch(() => {});
+      return;
+    }
+    // أضف/حدّث في DB
+    await db
+      .insert(encryptWordsTable)
+      .values({ word, replacement, addedBy: userId })
+      .onConflictDoUpdate({ target: encryptWordsTable.word, set: { replacement, addedBy: userId } });
+    encryptDict[word] = replacement; // حدّث الذاكرة فوراً
+    await message.reply({
+      content: `✅ تمت الإضافة!\n> **\`${word}\`** ← \`${replacement}\`\nالبوت هيحذّر لو حد كتبها بدون تشفير دلوقتي.`,
+    }).catch(() => {});
+    return;
+  }
+
+  // ── !حذف-تشفير — حذف كلمة من القاموس (أونر فقط) ────────────────────────
+  // الصيغة: !حذف-تشفير كلمة
+  if (content.trim().startsWith("!حذف-تشفير")) {
+    if (userId !== OWNER_ID) {
+      await message.reply({ content: "❌ هذا الأمر للأونر فقط." }).catch(() => {});
+      return;
+    }
+    const word = content.trim().slice("!حذف-تشفير".length).trim();
+    if (!word) {
+      await message.reply({ content: "❌ الصيغة الصحيحة:\n`!حذف-تشفير كلمة`" }).catch(() => {});
+      return;
+    }
+    if (!encryptDict[word]) {
+      await message.reply({ content: `❌ الكلمة **\`${word}\`** مش موجودة في القاموس.` }).catch(() => {});
+      return;
+    }
+    await db.delete(encryptWordsTable).where(eq(encryptWordsTable.word, word));
+    delete encryptDict[word];
+    await message.reply({ content: `✅ تم حذف **\`${word}\`** من قاموس التشفير.` }).catch(() => {});
+    return;
+  }
+
+  // ── !قاموس-تشفير — عرض كل الكلمات في القاموس ───────────────────────────
+  if (content.trim() === "!قاموس-تشفير") {
+    const entries = Object.entries(encryptDict);
+    const gIconURL = message.guild?.iconURL({ extension: "png", size: 256 }) ?? undefined;
+    if (entries.length === 0) {
+      await message.reply({ content: "📭 قاموس التشفير فاضي حالياً." }).catch(() => {});
+      return;
+    }
+    const rows = entries.map(([w, r]) => `• \`${w}\` ← \`${r}\``).join("\n");
+    const embed = new EmbedBuilder()
+      .setAuthor({ name: "Dragon $hop", iconURL: gIconURL })
+      .setTitle("📖 قاموس كلمات التشفير")
+      .setDescription(rows)
+      .setColor(0x5865f2)
+      .setFooter({ text: `${entries.length} كلمة | !اضافة-تشفير كلمة | بديل  •  !حذف-تشفير كلمة`, iconURL: gIconURL });
+    await channel.send({ embeds: [embed] }).catch(() => {});
     return;
   }
 

@@ -293,3 +293,16 @@ export const productRequestsTable = pgTable("product_requests", {
   unique("product_requests_room_ticket_unique").on(table.roomChannelId, table.ticketNumber),
 ]);
 export type ProductRequest = typeof productRequestsTable.$inferSelect;
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  encrypt_words — قاموس كلمات التشفير الديناميكي
+//  NOTE: بيتحمل في الذاكرة عند بدء البوت ويتحدث عند الإضافة/الحذف.
+//        الكلمات الأصلية (hardcoded) بتتنزل مرة واحدة لو الجدول فاضي.
+// ══════════════════════════════════════════════════════════════════════════════
+export const encryptWordsTable = pgTable("encrypt_words", {
+  id:          serial("id").primaryKey(),
+  word:        text("word").notNull().unique(),
+  replacement: text("replacement").notNull(),
+  addedBy:     text("added_by").notNull().default("system"),
+  createdAt:   timestamp("created_at").defaultNow(),
+});
