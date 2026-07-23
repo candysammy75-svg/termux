@@ -3843,10 +3843,28 @@ client.on(Events.MessageCreate, async (message: Message) => {
   const content  = message.content;
   const channel  = message.channel as TextChannel;
 
-  // ── !تشفير — إرسال إمبيد التشفير اليدوي ───────────────────────────────────
+  // ── !تشفير — إمبيد صغير في نفس الشانل، يتمسح أوتوماتيك بعد الاستخدام ────
   if (content.trim() === "!تشفير") {
-    const { embed, row } = buildEncryptEmbed(message.guild);
-    await channel.send({ embeds: [embed], components: [row] }).catch(() => {});
+    // امسح رسالة الأمر بهدوء
+    await message.delete().catch(() => {});
+
+    const gIconURL = message.guild?.iconURL({ extension: "png", size: 256 }) ?? undefined;
+    const miniEmbed = new EmbedBuilder()
+      .setDescription("🔒 اضغط الزرار عشان تشفر رسالتك")
+      .setColor(0x5865F2)
+      .setFooter({ text: "Dragon $hop", iconURL: gIconURL });
+
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId("encrypt_btn_inline")
+        .setLabel("تشفير رسالة")
+        .setEmoji({ id: "1499748971705536634", name: "crabrave", animated: true })
+        .setStyle(ButtonStyle.Primary),
+    );
+
+    const sent = await channel.send({ embeds: [miniEmbed], components: [row] }).catch(() => null);
+    // امسح الإمبيد تلقائياً بعد 60 ثانية لو لم يُستخدم
+    if (sent) setTimeout(() => sent.delete().catch(() => {}), 60_000);
     return;
   }
 
@@ -8793,6 +8811,27 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
     return;
   }
 
+  // ── encrypt_btn_inline — نفس المودال لكن من شانل المتجر، يمسح الإمبيد بعدها ─
+  if (interaction.isButton() && interaction.customId === "encrypt_btn_inline") {
+    const msgId = interaction.message.id;
+    const modal = new ModalBuilder()
+      .setCustomId(`encrypt_modal_inline:${msgId}`)
+      .setTitle("🔒 تشفير الرسالة");
+
+    const msgInput = new TextInputBuilder()
+      .setCustomId("encrypt_msg")
+      .setLabel("اكتب الرسالة")
+      .setStyle(TextInputStyle.Paragraph)
+      .setPlaceholder("اكتب رسالتك هنا وهتتشفر تلقائياً...")
+      .setRequired(true)
+      .setMinLength(1)
+      .setMaxLength(2000);
+
+    modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(msgInput));
+    await interaction.showModal(modal);
+    return;
+  }
+
   // ── encrypt_btn — فتح مودال التشفير ────────────────────────────────────────
   if (interaction.isButton() && interaction.customId === "encrypt_btn") {
     const modal = new ModalBuilder()
@@ -8810,6 +8849,32 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
 
     modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(msgInput));
     await interaction.showModal(modal);
+    return;
+  }
+
+  // ── encrypt_modal_inline — رد مخفي + مسح إمبيد الشانل ──────────────────
+  if (interaction.isModalSubmit() && interaction.customId.startsWith("encrypt_modal_inline:")) {
+    const originalText  = interaction.fields.getTextInputValue("encrypt_msg");
+    const encryptedText = encryptMessage(originalText);
+    const gIconURL      = interaction.guild?.iconURL({ extension: "png", size: 256 }) ?? undefined;
+    const DIV_E         = "ـﮩ════════════════ﮩـ";
+
+    const encResultEmbed = new EmbedBuilder()
+      .setAuthor({ name: "Dragon $hop", iconURL: gIconURL })
+      .setTitle("🔒 رسالتك المشفرة")
+      .setDescription(`> ${DIV_E}\n\n\`\`\`\n${encryptedText}\n\`\`\`\n\n> ${DIV_E}`)
+      .setColor(0x5865F2)
+      .setFooter({ text: "انسخ النص المشفر وانشره في متجرك ✅", iconURL: gIconURL });
+
+    await interaction.reply({ embeds: [encResultEmbed], flags: MessageFlags.Ephemeral });
+
+    // امسح إمبيد الزرار من الشانل
+    const msgId = interaction.customId.split(":")[1];
+    if (msgId && interaction.channel) {
+      await (interaction.channel as TextChannel).messages.fetch(msgId)
+        .then((m) => m.delete())
+        .catch(() => {});
+    }
     return;
   }
 
