@@ -8444,8 +8444,13 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
   // ── /rolespanel — بانل اختيار رتب الإشعارات ─────────────────────────────
   if (interaction.commandName === "rolespanel") {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-    if (interaction.user.id !== OWNER_ID) {
-      await interaction.editReply({ content: "❌ هذا الأمر للأونر فقط." });
+    const member = interaction.guild?.members.cache.get(interaction.user.id)
+                ?? await interaction.guild?.members.fetch(interaction.user.id).catch(() => null);
+    const isOwnerOrAdmin =
+      interaction.user.id === OWNER_ID ||
+      (member?.permissions.has(PermissionFlagsBits.Administrator) ?? false);
+    if (!isOwnerOrAdmin) {
+      await interaction.editReply({ content: "❌ هذا الأمر للأونر والأدمن فقط." });
       return;
     }
 
