@@ -1761,6 +1761,18 @@ const ORDERS_ROLE_ID = "1525478170491617382";
 const AUCTION_ROLE_ID = "1525478115181334548";
 
 /**
+ * ID رول "عدم الإزعاج" — أي عضو عنده الرتبة دي بيختفي منه كل شانلات الشوب
+ * (رومات المتاجر + المزادات + الطلبيات) وبتتشال منه رتب المنشنات الثلاثة.
+ */
+const DND_ROLE_ID = "1529937432517017781";
+
+/** شانلات الشوب العامة اللي المفروض تختفي من صاحب رتبة DND */
+const SHOP_PUBLIC_CHANNEL_IDS: readonly string[] = [
+  ...AUCTION_ROOM_CHANNEL_IDS,
+  ORDERS_STATIC_CHANNEL_ID,
+];
+
+/**
  * ID روم الطلبيات الثابت — أي حد في السيرفر يقدر يبعت فيه (مش زي رومات
  * العملاء المقفولة على الأونر/الشريك). فيه سلوموود ساعة (بيتحط تلقائياً
  * عند تشغيل البوت)، والمنشنات المسموحة فيه: @everyone / @here / طلبيات بس —
@@ -2998,6 +3010,11 @@ client.once(Events.ClientReady, async () => {
     new SlashCommandBuilder()
       .setName("encryptdict")
       .setDescription("📖 عرض كل كلمات قاموس التشفير"),
+
+    // ── بانل الرتب/الإشعارات ──────────────────────────────────────────────────
+    new SlashCommandBuilder()
+      .setName("rolespanel")
+      .setDescription("📋 [أونر] ابعت بانل اختيار رتب الإشعارات في الشانل الحالي"),
   ];
 
   const rest = new REST({ version: "10" }).setToken(TOKEN);
@@ -4568,6 +4585,8 @@ client.on(Events.MessageCreate, async (message: Message) => {
               PermissionFlagsBits.MentionEveryone,
             ],
           },
+          // رتبة عدم الإزعاج — مش المفروض تشوف رومات المتاجر
+          { id: DND_ROLE_ID, deny: [PermissionFlagsBits.ViewChannel] },
         ],
       });
 
@@ -8422,6 +8441,42 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
     return;
   }
 
+  // ── /rolespanel — بانل اختيار رتب الإشعارات ─────────────────────────────
+  if (interaction.commandName === "rolespanel") {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    if (interaction.user.id !== OWNER_ID) {
+      await interaction.editReply({ content: "❌ هذا الأمر للأونر فقط." });
+      return;
+    }
+
+    const gIconURL = interaction.guild?.iconURL({ extension: "png", size: 256 }) ?? undefined;
+    const panelEmbed = new EmbedBuilder()
+      .setAuthor({ name: "Dragon $hop", iconURL: gIconURL })
+      .setTitle("🔔 بانل الإشعارات")
+      .setDescription(
+        "اضغط على الإيموجي اللي قدام كل رتبة عشان تاخدها أو تتشالها:\n\n" +
+        "🔕 **عدم الإزعاج** — تختفي منك كل رومات الشوب ورتب المنشنات\n" +
+        "🎰 **منشن مزادات** — تتمنشن في إعلانات المزادات\n" +
+        "🏪 **منشن متاجر** — تتمنشن في عروض المتاجر\n" +
+        "📦 **منشن طلبيات** — تتمنشن في الطلبيات"
+      )
+      .setColor(0x5865F2)
+      .setFooter({ text: "Dragon $hop", iconURL: gIconURL });
+
+    const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder().setCustomId("role_toggle_dnd")    .setEmoji("🔕").setLabel("عدم الإزعاج")  .setStyle(ButtonStyle.Danger),
+      new ButtonBuilder().setCustomId("role_toggle_auction").setEmoji("🎰").setLabel("منشن مزادات") .setStyle(ButtonStyle.Secondary),
+    );
+    const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder().setCustomId("role_toggle_offers") .setEmoji("🏪").setLabel("منشن متاجر")  .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId("role_toggle_orders") .setEmoji("📦").setLabel("منشن طلبيات") .setStyle(ButtonStyle.Secondary),
+    );
+
+    await (interaction.channel as TextChannel).send({ embeds: [panelEmbed], components: [row1, row2] });
+    await interaction.editReply({ content: "✅ تم إرسال البانل." });
+    return;
+  }
+
   // ── /addencrypt ───────────────────────────────────────────────────────────
   if (interaction.commandName === "addencrypt") {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -8808,6 +8863,85 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
     await interaction.editReply({
       content: `✅ بدأ النشر التلقائي في متجرك! كل 6 ساعات لمدة **${days}** ${days === 1 ? "يوم" : "أيام"}.`,
     });
+    return;
+  }
+
+  // ── role_toggle_* — بانل الإشعارات ───────────────────────────────────────
+  if (interaction.isButton() && interaction.customId.startsWith("role_toggle_")) {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    const member = interaction.guild?.members.cache.get(interaction.user.id)
+                ?? await interaction.guild?.members.fetch(interaction.user.id).catch(() => null);
+    if (!member) {
+      await interaction.editReply({ content: "❌ تعذّر جلب بياناتك." });
+      return;
+    }
+
+    const key = interaction.customId; // role_toggle_dnd / auction / offers / orders
+
+    // ── DND ──────────────────────────────────────────────────────────────────
+    if (key === "role_toggle_dnd") {
+      const hasDnd = member.roles.cache.has(DND_ROLE_ID);
+
+      if (hasDnd) {
+        // إزالة رتبة DND
+        await member.roles.remove(DND_ROLE_ID, "User toggled DND off").catch(() => {});
+        await interaction.editReply({ content: "✅ تم إزالة رتبة **عدم الإزعاج** — يمكنك الآن اختيار رتب المنشنات." });
+      } else {
+        // إضافة رتبة DND
+        await member.roles.add(DND_ROLE_ID, "User toggled DND on").catch(() => {});
+        // إزالة رتب المنشنات الثلاثة
+        const mentionRoles = [OFFERS_ROLE_ID, ORDERS_ROLE_ID, AUCTION_ROLE_ID].filter(r => member.roles.cache.has(r));
+        if (mentionRoles.length) await member.roles.remove(mentionRoles, "DND active").catch(() => {});
+
+        // إخفاء شانلات الشوب العامة (المزادات + الطلبيات)
+        for (const chId of SHOP_PUBLIC_CHANNEL_IDS) {
+          const ch = interaction.guild?.channels.cache.get(chId);
+          if (ch) {
+            await ch.permissionOverwrites.edit(interaction.user.id, { ViewChannel: false })
+              .catch(() => {});
+          }
+        }
+        // إخفاء رومات المتاجر النشطة
+        const activeRooms = await db
+          .select({ roomId: purchasesTable.discordRoomId })
+          .from(purchasesTable)
+          .where(and(eq(purchasesTable.status, "completed")))
+          .catch(() => [] as { roomId: string | null }[]);
+        for (const { roomId } of activeRooms) {
+          if (!roomId) continue;
+          const ch = interaction.guild?.channels.cache.get(roomId);
+          if (ch) await ch.permissionOverwrites.edit(interaction.user.id, { ViewChannel: false }).catch(() => {});
+        }
+
+        await interaction.editReply({ content: "✅ تم تفعيل **عدم الإزعاج** — اختفت منك كل رومات الشوب ورتب المنشنات." });
+      }
+      return;
+    }
+
+    // ── رتب المنشنات الثلاثة ─────────────────────────────────────────────────
+    const ROLE_MAP: Record<string, { id: string; label: string }> = {
+      role_toggle_auction: { id: AUCTION_ROLE_ID, label: "منشن مزادات" },
+      role_toggle_offers:  { id: OFFERS_ROLE_ID,  label: "منشن متاجر"  },
+      role_toggle_orders:  { id: ORDERS_ROLE_ID,  label: "منشن طلبيات" },
+    };
+    const roleInfo = ROLE_MAP[key];
+    if (!roleInfo) return;
+
+    // لو معاه DND مش يقدر ياخد رتبة منشن
+    if (member.roles.cache.has(DND_ROLE_ID)) {
+      await interaction.editReply({ content: "❌ مش تقدر تاخد رتبة منشن وعندك **عدم الإزعاج** — شيلها أولاً." });
+      return;
+    }
+
+    const hasRole = member.roles.cache.has(roleInfo.id);
+    if (hasRole) {
+      await member.roles.remove(roleInfo.id, "User toggled role off").catch(() => {});
+      await interaction.editReply({ content: `✅ تم إزالة رتبة **${roleInfo.label}**.` });
+    } else {
+      await member.roles.add(roleInfo.id, "User toggled role on").catch(() => {});
+      await interaction.editReply({ content: `✅ تم إضافة رتبة **${roleInfo.label}**.` });
+    }
     return;
   }
 
