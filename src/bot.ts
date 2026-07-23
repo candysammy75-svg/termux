@@ -3059,6 +3059,17 @@ client.once(Events.ClientReady, async () => {
         });
     }
 
+    // ── تطبيق deny رتبة DND على الشانلات الثابتة (مزاد + طلبيات) ─────────
+    // NOTE: ده بيضمن إن أي حد عنده رتبة DND يختفي عنه الشانلات دي تلقائياً
+    //       من غير ما يحتاج يضغط الزرار أو يعيد تشغيل البوت.
+    for (const chId of SHOP_PUBLIC_CHANNEL_IDS) {
+      const ch = guild.channels.cache.get(chId);
+      if (!ch) continue;
+      await ch.permissionOverwrites
+        .edit(DND_ROLE_ID, { ViewChannel: false })
+        .catch((err) => logger.error({ err, chId }, "Failed to set DND deny on static shop channel"));
+    }
+
     // ── استعادة IDs رسائل شانل المزاد بعد الـ restart ────────────────────
     try {
       const infoCh = await guild.channels.fetch(AUCTION_INFO_CHANNEL_ID).catch(() => null) as TextChannel | null;
