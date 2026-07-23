@@ -1766,12 +1766,6 @@ const AUCTION_ROLE_ID = "1525478115181334548";
  */
 const DND_ROLE_ID = "1529937432517017781";
 
-/** شانلات الشوب العامة اللي المفروض تختفي من صاحب رتبة DND */
-const SHOP_PUBLIC_CHANNEL_IDS: readonly string[] = [
-  ...AUCTION_ROOM_CHANNEL_IDS,
-  ORDERS_STATIC_CHANNEL_ID,
-];
-
 /**
  * ID روم الطلبيات الثابت — أي حد في السيرفر يقدر يبعت فيه (مش زي رومات
  * العملاء المقفولة على الأونر/الشريك). فيه سلوموود ساعة (بيتحط تلقائياً
@@ -1797,6 +1791,12 @@ const AUCTION_ROOM_CHANNEL_IDS: readonly string[] = [
   "1523801341292712051",
   "1523801346195853396",
   "1526567411199905802",
+];
+
+/** شانلات الشوب العامة اللي المفروض تختفي من صاحب رتبة DND */
+const SHOP_PUBLIC_CHANNEL_IDS: readonly string[] = [
+  ...AUCTION_ROOM_CHANNEL_IDS,
+  ORDERS_STATIC_CHANNEL_ID,
 ];
 
 /** رتبة "مسؤول المزاد" — الأدمن اللي بيدير المزايدة يدوياً وبيتمنشن عند بداية كل مزاد */
