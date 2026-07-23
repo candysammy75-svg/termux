@@ -1552,19 +1552,8 @@ function buildEncryptEmbed(guild?: Guild | null): { embed: EmbedBuilder; row: Ac
     .setAuthor({ name: "Dragon $hop", iconURL: gIconURL })
     .setTitle("🔒 تشفير الرسائل")
     .setDescription(
-      `> ${DIV}
-
-` +
-      `لحماية متجرك **استخدم التشفير** قبل ما تنشر أي رسالة.
-
-` +
-      `**طريقة الاستخدام:**
-` +
-      `اضغط الزرار ← اكتب رسالتك ← هتوصلك رسالة **مخفية** بالنص المشفر
-` +
-      `ثم انشر النص المشفر في متجرك بشكل طبيعي ✅
-
-` +
+      `> ${DIV}\n\n` +
+      `اضغط الزرار ← اكتب رسالتك ← انسخ النص المشفر وانشره ✅\n\n` +
       `> ${DIV}`
     )
     .setColor(0x5865F2)
@@ -2993,6 +2982,22 @@ client.once(Events.ClientReady, async () => {
       .addStringOption((o) => o.setName("content").setDescription("نص الرسالة").setRequired(true).setMaxLength(500))
       .addUserOption((o)   => o.setName("user").setDescription("يوزر ديسكورد (اختياري)").setRequired(false))
       .addStringOption((o) => o.setName("name").setDescription("اسم مخصص (اختياري)").setRequired(false)),
+
+    // ── قاموس التشفير ─────────────────────────────────────────────────────────
+    new SlashCommandBuilder()
+      .setName("addencrypt")
+      .setDescription("🔐 [أونر] أضف كلمة لقاموس التشفير")
+      .addStringOption((o) => o.setName("word").setDescription("الكلمة الأصلية").setRequired(true))
+      .addStringOption((o) => o.setName("replacement").setDescription("البديل المشفر").setRequired(true)),
+
+    new SlashCommandBuilder()
+      .setName("removeencrypt")
+      .setDescription("🗑️ [أونر] احذف كلمة من قاموس التشفير")
+      .addStringOption((o) => o.setName("word").setDescription("الكلمة المراد حذفها").setRequired(true)),
+
+    new SlashCommandBuilder()
+      .setName("encryptdict")
+      .setDescription("📖 عرض كل كلمات قاموس التشفير"),
   ];
 
   const rest = new REST({ version: "10" }).setToken(TOKEN);
@@ -3842,78 +3847,6 @@ client.on(Events.MessageCreate, async (message: Message) => {
   if (content.trim() === "!تشفير") {
     const { embed, row } = buildEncryptEmbed(message.guild);
     await channel.send({ embeds: [embed], components: [row] }).catch(() => {});
-    return;
-  }
-
-  // ── !اضافة-تشفير — إضافة كلمة للقاموس (أونر فقط) ──────────────────────────
-  // الصيغة: !اضافة-تشفير كلمة | بديلها
-  if (content.trim().startsWith("!اضافة-تشفير")) {
-    if (userId !== OWNER_ID) {
-      await message.reply({ content: "❌ هذا الأمر للأونر فقط." }).catch(() => {});
-      return;
-    }
-    const raw = content.trim().slice("!اضافة-تشفير".length).trim();
-    if (!raw.includes("|")) {
-      await message.reply({ content: "❌ الصيغة الصحيحة:\n`!اضافة-تشفير كلمة | بديلها`" }).catch(() => {});
-      return;
-    }
-    const sepIdx      = raw.indexOf("|");
-    const word        = raw.slice(0, sepIdx).trim();
-    const replacement = raw.slice(sepIdx + 1).trim();
-    if (!word || !replacement) {
-      await message.reply({ content: "❌ الكلمة أو البديل فاضي!" }).catch(() => {});
-      return;
-    }
-    // أضف/حدّث في DB
-    await db
-      .insert(encryptWordsTable)
-      .values({ word, replacement, addedBy: userId })
-      .onConflictDoUpdate({ target: encryptWordsTable.word, set: { replacement, addedBy: userId } });
-    encryptDict[word] = replacement; // حدّث الذاكرة فوراً
-    await message.reply({
-      content: `✅ تمت الإضافة!\n> **\`${word}\`** ← \`${replacement}\`\nالبوت هيحذّر لو حد كتبها بدون تشفير دلوقتي.`,
-    }).catch(() => {});
-    return;
-  }
-
-  // ── !حذف-تشفير — حذف كلمة من القاموس (أونر فقط) ────────────────────────
-  // الصيغة: !حذف-تشفير كلمة
-  if (content.trim().startsWith("!حذف-تشفير")) {
-    if (userId !== OWNER_ID) {
-      await message.reply({ content: "❌ هذا الأمر للأونر فقط." }).catch(() => {});
-      return;
-    }
-    const word = content.trim().slice("!حذف-تشفير".length).trim();
-    if (!word) {
-      await message.reply({ content: "❌ الصيغة الصحيحة:\n`!حذف-تشفير كلمة`" }).catch(() => {});
-      return;
-    }
-    if (!encryptDict[word]) {
-      await message.reply({ content: `❌ الكلمة **\`${word}\`** مش موجودة في القاموس.` }).catch(() => {});
-      return;
-    }
-    await db.delete(encryptWordsTable).where(eq(encryptWordsTable.word, word));
-    delete encryptDict[word];
-    await message.reply({ content: `✅ تم حذف **\`${word}\`** من قاموس التشفير.` }).catch(() => {});
-    return;
-  }
-
-  // ── !قاموس-تشفير — عرض كل الكلمات في القاموس ───────────────────────────
-  if (content.trim() === "!قاموس-تشفير") {
-    const entries = Object.entries(encryptDict);
-    const gIconURL = message.guild?.iconURL({ extension: "png", size: 256 }) ?? undefined;
-    if (entries.length === 0) {
-      await message.reply({ content: "📭 قاموس التشفير فاضي حالياً." }).catch(() => {});
-      return;
-    }
-    const rows = entries.map(([w, r]) => `• \`${w}\` ← \`${r}\``).join("\n");
-    const embed = new EmbedBuilder()
-      .setAuthor({ name: "Dragon $hop", iconURL: gIconURL })
-      .setTitle("📖 قاموس كلمات التشفير")
-      .setDescription(rows)
-      .setColor(0x5865f2)
-      .setFooter({ text: `${entries.length} كلمة | !اضافة-تشفير كلمة | بديل  •  !حذف-تشفير كلمة`, iconURL: gIconURL });
-    await channel.send({ embeds: [embed] }).catch(() => {});
     return;
   }
 
@@ -8468,6 +8401,64 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
       logger.error({ err }, "Failed to generate social image");
       await interaction.editReply({ content: "❌ مشكلة في توليد الصورة. حاول تاني." });
     }
+    return;
+  }
+
+  // ── /addencrypt ───────────────────────────────────────────────────────────
+  if (interaction.commandName === "addencrypt") {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    if (interaction.user.id !== OWNER_ID) {
+      await interaction.editReply({ content: "❌ هذا الأمر للأونر فقط." });
+      return;
+    }
+    const word        = interaction.options.getString("word", true).trim();
+    const replacement = interaction.options.getString("replacement", true).trim();
+    await db
+      .insert(encryptWordsTable)
+      .values({ word, replacement, addedBy: interaction.user.id })
+      .onConflictDoUpdate({ target: encryptWordsTable.word, set: { replacement, addedBy: interaction.user.id } });
+    encryptDict[word] = replacement;
+    await interaction.editReply({
+      content: `✅ تمت الإضافة!\n> **\`${word}\`** ← \`${replacement}\`\nالبوت هيحذّر لو حد كتبها بدون تشفير دلوقتي.`,
+    });
+    return;
+  }
+
+  // ── /removeencrypt ────────────────────────────────────────────────────────
+  if (interaction.commandName === "removeencrypt") {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    if (interaction.user.id !== OWNER_ID) {
+      await interaction.editReply({ content: "❌ هذا الأمر للأونر فقط." });
+      return;
+    }
+    const word = interaction.options.getString("word", true).trim();
+    if (!encryptDict[word]) {
+      await interaction.editReply({ content: `❌ الكلمة **\`${word}\`** مش موجودة في القاموس.` });
+      return;
+    }
+    await db.delete(encryptWordsTable).where(eq(encryptWordsTable.word, word));
+    delete encryptDict[word];
+    await interaction.editReply({ content: `✅ تم حذف **\`${word}\`** من قاموس التشفير.` });
+    return;
+  }
+
+  // ── /encryptdict ──────────────────────────────────────────────────────────
+  if (interaction.commandName === "encryptdict") {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    const entries = Object.entries(encryptDict);
+    if (entries.length === 0) {
+      await interaction.editReply({ content: "📭 قاموس التشفير فاضي حالياً." });
+      return;
+    }
+    const gIconURL = interaction.guild?.iconURL({ extension: "png", size: 256 }) ?? undefined;
+    const rows     = entries.map(([w, r]) => `• \`${w}\` ← \`${r}\``).join("\n");
+    const embed    = new EmbedBuilder()
+      .setAuthor({ name: "Dragon $hop", iconURL: gIconURL })
+      .setTitle("📖 قاموس كلمات التشفير")
+      .setDescription(rows)
+      .setColor(0x5865f2)
+      .setFooter({ text: `${entries.length} كلمة | /addencrypt  •  /removeencrypt`, iconURL: gIconURL });
+    await interaction.editReply({ embeds: [embed] });
     return;
   }
 
