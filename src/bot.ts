@@ -4864,6 +4864,33 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
       return;
     }
 
+    // ── فئة الطلبيات (معالجة خاصة — شانل ثابت مجاني، المنشن بفلوس) ─────────
+    if (category === "الطلبيات") {
+      const guildIconURL = interaction.guild?.iconURL({ extension: "png", size: 256 }) ?? undefined;
+      const ordersEmbed = new EmbedBuilder()
+        .setAuthor({ name: "Dragon $hop", iconURL: guildIconURL })
+        .setTitle("📦 الطلبيات")
+        .setDescription(
+          `> أي كود يقدر يبعت طلبه مجاناً في <#${ORDERS_STATIC_CHANNEL_ID}> بدون أي رسوم.\n\n` +
+          `> 💰 **المنشن** فقط هو اللي بيتشتری:\n` +
+          `> • <@&${ORDERS_ROLE_ID}> — **5,000,000** كريدت\n\n` +
+          `> لشراء منشن الطلبيات اضغط **شراء الطلبيات** من قائمة الشراء.`
+        )
+        .setColor(0x00bfff)
+        .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p" });
+
+      if (guildIconURL) ordersEmbed.setThumbnail(guildIconURL);
+
+      const ordersFiles: AttachmentBuilder[] = [];
+      if (fs.existsSync(ORDERS_BANNER_PATH)) {
+        ordersFiles.push(new AttachmentBuilder(ORDERS_BANNER_PATH, { name: "dragon_text_banner.webp" }));
+        ordersEmbed.setImage("attachment://dragon_text_banner.webp");
+      }
+
+      await interaction.editReply({ embeds: [ordersEmbed], files: ordersFiles });
+      return;
+    }
+
     // ── فئات الرومات العادية ────────────────────────────────────────────────
     const rooms = await db.select().from(roomsTable).where(eq(roomsTable.category, category));
 
@@ -4975,6 +5002,41 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
       );
 
       await interaction.editReply({ embeds: [embed], components: [row] });
+      return;
+    }
+
+    // ── فئة الطلبيات (معالجة خاصة — الروم مجاني، المنشن بفلوس) ─────────────
+    if (category === "الطلبيات") {
+      const guildIconURL = interaction.guild?.iconURL({ extension: "png", size: 256 }) ?? undefined;
+      const ordersEmbed = new EmbedBuilder()
+        .setAuthor({ name: "Dragon $hop", iconURL: guildIconURL })
+        .setTitle("📦 شراء — الطلبيات")
+        .setDescription(
+          `> أي كود يقدر يبعت طلبه مجاناً في <#${ORDERS_STATIC_CHANNEL_ID}> بدون أي رسوم.\n\n` +
+          `> 💰 اللي تقدر تشتريه هو **منشن الطلبيات** فقط:\n` +
+          `> • <@&${ORDERS_ROLE_ID}> — **5,000,000** كريدت\n\n` +
+          `> اضغط الزرار أدناه للشراء.`
+        )
+        .setColor(0x2ecc71)
+        .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p" });
+
+      if (guildIconURL) ordersEmbed.setThumbnail(guildIconURL);
+
+      const ordersFiles: AttachmentBuilder[] = [];
+      if (fs.existsSync(ORDERS_BANNER_PATH)) {
+        ordersFiles.push(new AttachmentBuilder(ORDERS_BANNER_PATH, { name: "dragon_text_banner.webp" }));
+        ordersEmbed.setImage("attachment://dragon_text_banner.webp");
+      }
+
+      const ordersRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId("buy_mention_orders")
+          .setLabel("شراء منشن طلبيات")
+          .setEmoji(BUY_EMOJI)
+          .setStyle(ButtonStyle.Success),
+      );
+
+      await interaction.editReply({ embeds: [ordersEmbed], files: ordersFiles, components: [ordersRow] });
       return;
     }
 
