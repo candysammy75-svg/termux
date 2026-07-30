@@ -4867,14 +4867,29 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
     // ── فئة الطلبيات (معالجة خاصة — شانل ثابت مجاني، المنشن بفلوس) ─────────
     if (category === "الطلبيات") {
       const guildIconURL = interaction.guild?.iconURL({ extension: "png", size: 256 }) ?? undefined;
+
+      // جيب أسعار الـ 3 أنواع من DB
+      const priceKeys = ["mention_requests", "mention_here_requests", "mention_everyone_requests"] as const;
+      const priceRows = await db.select().from(addonPricesTable).where(inArray(addonPricesTable.key, [...priceKeys]));
+      const priceOf = (key: string) => {
+        const row = priceRows.find((r) => r.key === key);
+        return row ? Number(row.price).toLocaleString() : "غير محدد";
+      };
+
+      const DIV = "ـﮩ════════════════ﮩـ";
       const ordersEmbed = new EmbedBuilder()
         .setAuthor({ name: "Dragon $hop", iconURL: guildIconURL })
-        .setTitle("📦 الطلبيات")
+        .setTitle("📦 أسعار الطلبيات")
         .setDescription(
           `> أي كود يقدر يبعت طلبه مجاناً في <#${ORDERS_STATIC_CHANNEL_ID}> بدون أي رسوم.\n\n` +
-          `> 💰 **المنشن** فقط هو اللي بيتشتری:\n` +
-          `> • <@&${ORDERS_ROLE_ID}> — **5,000,000** كريدت\n\n` +
-          `> لشراء منشن الطلبيات اضغط **شراء الطلبيات** من قائمة الشراء.`
+          `> ${DIV}\n` +
+          `> 💰 **المنشنات** هي اللي بتتشتری:\n` +
+          `> ${DIV}`
+        )
+        .addFields(
+          { name: `${MONEY_EMOJI} منشن طلبات`,       value: `> **${priceOf("mention_requests")}** كريدت\n> ${DIV}`,        inline: false },
+          { name: `${MONEY_EMOJI} منشن هير طلبات`,   value: `> **${priceOf("mention_here_requests")}** كريدت\n> ${DIV}`,   inline: false },
+          { name: `${MONEY_EMOJI} منشن إيفري طلبات`, value: `> **${priceOf("mention_everyone_requests")}** كريدت\n> ${DIV}`, inline: false },
         )
         .setColor(0x00bfff)
         .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p" });
@@ -5013,9 +5028,7 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
         .setTitle("📦 شراء — الطلبيات")
         .setDescription(
           `> أي كود يقدر يبعت طلبه مجاناً في <#${ORDERS_STATIC_CHANNEL_ID}> بدون أي رسوم.\n\n` +
-          `> 💰 اللي تقدر تشتريه هو **منشن الطلبيات** فقط:\n` +
-          `> • <@&${ORDERS_ROLE_ID}> — **5,000,000** كريدت\n\n` +
-          `> اضغط الزرار أدناه للشراء.`
+          `> 💰 اللي تقدر تشتريه هو **المنشن** — اختار النوع أدناه:`
         )
         .setColor(0x2ecc71)
         .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p" });
@@ -5028,12 +5041,23 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
         ordersEmbed.setImage("attachment://dragon_text_banner.webp");
       }
 
+      // الـ 3 أنواع — نفس customId بتاع الإضافات عشان الـ handler يشتغل صح
       const ordersRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
-          .setCustomId("buy_mention_orders")
-          .setLabel("شراء منشن طلبيات")
+          .setCustomId("quickbuy_addon_mention_requests")
+          .setLabel("منشن طلبات")
           .setEmoji(BUY_EMOJI)
-          .setStyle(ButtonStyle.Success),
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId("quickbuy_addon_mention_here_requests")
+          .setLabel("منشن هير طلبات")
+          .setEmoji(BUY_EMOJI)
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId("quickbuy_addon_mention_everyone_requests")
+          .setLabel("منشن إيفري طلبات")
+          .setEmoji(BUY_EMOJI)
+          .setStyle(ButtonStyle.Secondary),
       );
 
       await interaction.editReply({ embeds: [ordersEmbed], files: ordersFiles, components: [ordersRow] });
