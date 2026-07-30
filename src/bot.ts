@@ -5013,7 +5013,7 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
         .setDescription(
           `> الطلبيات حالياً **ببلاش** 🎉\n` +
           `> تقدر تبعت طلبك في <#${ORDERS_STATIC_CHANNEL_ID}> دلوقتي\n\n` +
-          `> وتقدر تشتري **منشن** من الأنواع أدناه 💰`
+          `> وتقدر تشتري **منشن** من الإضافات 💰`
         )
         .setColor(0x2ecc71)
         .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p" });
@@ -5026,26 +5026,7 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
         ordersEmbed.setImage("attachment://dragon_text_banner.webp");
       }
 
-      // الـ 3 أنواع — نفس customId بتاع الإضافات عشان الـ handler يشتغل صح
-      const ordersRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder()
-          .setCustomId("quickbuy_addon_mention_requests")
-          .setLabel("منشن طلبات")
-          .setEmoji(BUY_EMOJI)
-          .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
-          .setCustomId("quickbuy_addon_mention_here_requests")
-          .setLabel("منشن هير طلبات")
-          .setEmoji(BUY_EMOJI)
-          .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
-          .setCustomId("quickbuy_addon_mention_everyone_requests")
-          .setLabel("منشن إيفري طلبات")
-          .setEmoji(BUY_EMOJI)
-          .setStyle(ButtonStyle.Secondary),
-      );
-
-      await interaction.editReply({ embeds: [ordersEmbed], files: ordersFiles, components: [ordersRow] });
+      await interaction.editReply({ embeds: [ordersEmbed], files: ordersFiles });
       return;
     }
 
@@ -5097,11 +5078,18 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const userId = interaction.user.id;
 
-    const userStore = await db.select().from(purchasesTable)
-      .where(and(eq(purchasesTable.discordUserId, userId), eq(purchasesTable.status, "completed")))
-      .then((rows) => rows.find((p) => p.discordRoomId));
+    // منشنات الطلبات مش محتاجة متجر — أي حد يقدر يشتريها
+    const ORDERS_MENTION_KEYS = ["mention_requests", "mention_here_requests", "mention_everyone_requests"];
+    const addonKeyEarly = interaction.customId.replace("quickbuy_addon_", "");
+    const skipStoreCheck = ORDERS_MENTION_KEYS.includes(addonKeyEarly);
 
-    if (!userStore) {
+    const userStore = skipStoreCheck
+      ? null
+      : await db.select().from(purchasesTable)
+          .where(and(eq(purchasesTable.discordUserId, userId), eq(purchasesTable.status, "completed")))
+          .then((rows) => rows.find((p) => p.discordRoomId));
+
+    if (!skipStoreCheck && !userStore) {
       await interaction.editReply({ content: `هو انت عندك متجر اساسا ؟ <a:ZA_TOM:1500527266055323848>` });
       return;
     }
