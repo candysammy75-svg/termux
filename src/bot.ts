@@ -4867,29 +4867,13 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
     // ── فئة الطلبيات (معالجة خاصة — شانل ثابت مجاني، المنشن بفلوس) ─────────
     if (category === "الطلبيات") {
       const guildIconURL = interaction.guild?.iconURL({ extension: "png", size: 256 }) ?? undefined;
-
-      // جيب أسعار الـ 3 أنواع من DB
-      const priceKeys = ["mention_requests", "mention_here_requests", "mention_everyone_requests"] as const;
-      const priceRows = await db.select().from(addonPricesTable).where(inArray(addonPricesTable.key, [...priceKeys]));
-      const priceOf = (key: string) => {
-        const row = priceRows.find((r) => r.key === key);
-        return row ? Number(row.price).toLocaleString() : "غير محدد";
-      };
-
-      const DIV = "ـﮩ════════════════ﮩـ";
       const ordersEmbed = new EmbedBuilder()
         .setAuthor({ name: "Dragon $hop", iconURL: guildIconURL })
         .setTitle("📦 أسعار الطلبيات")
         .setDescription(
-          `> أي كود يقدر يبعت طلبه مجاناً في <#${ORDERS_STATIC_CHANNEL_ID}> بدون أي رسوم.\n\n` +
-          `> ${DIV}\n` +
-          `> 💰 **المنشنات** هي اللي بتتشتری:\n` +
-          `> ${DIV}`
-        )
-        .addFields(
-          { name: `${MONEY_EMOJI} منشن طلبات`,       value: `> **${priceOf("mention_requests")}** كريدت\n> ${DIV}`,        inline: false },
-          { name: `${MONEY_EMOJI} منشن هير طلبات`,   value: `> **${priceOf("mention_here_requests")}** كريدت\n> ${DIV}`,   inline: false },
-          { name: `${MONEY_EMOJI} منشن إيفري طلبات`, value: `> **${priceOf("mention_everyone_requests")}** كريدت\n> ${DIV}`, inline: false },
+          `> الطلبيات حالياً **ببلاش** 🎉\n` +
+          `> تقدر تبعت طلبك في <#${ORDERS_STATIC_CHANNEL_ID}> دلوقتي\n\n` +
+          `> وتقدر تشتري **منشن** من الإضافات 💰`
         )
         .setColor(0x00bfff)
         .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p" });
@@ -5027,8 +5011,9 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
         .setAuthor({ name: "Dragon $hop", iconURL: guildIconURL })
         .setTitle("📦 شراء — الطلبيات")
         .setDescription(
-          `> أي كود يقدر يبعت طلبه مجاناً في <#${ORDERS_STATIC_CHANNEL_ID}> بدون أي رسوم.\n\n` +
-          `> 💰 اللي تقدر تشتريه هو **المنشن** — اختار النوع أدناه:`
+          `> الطلبيات حالياً **ببلاش** 🎉\n` +
+          `> تقدر تبعت طلبك في <#${ORDERS_STATIC_CHANNEL_ID}> دلوقتي\n\n` +
+          `> وتقدر تشتري **منشن** من الأنواع أدناه 💰`
         )
         .setColor(0x2ecc71)
         .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p" });
