@@ -5078,6 +5078,33 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
   //       زرار الدفع الأصلي (pay_*/buy_change_store_name_*) على طول من غير
   //       عرض سعر منفصل قبلها — نفس منطق الدفع الأصلي متكررش خالص.
   if (interaction.isButton() && (interaction.customId.startsWith("quickbuy_addon_") || interaction.customId === "quickbuy_change_store_name")) {
+    // ── منشنات الطلبيات: modal لازم يتعمل قبل أي deferReply ──────────────────
+    {
+      const ORDERS_MODAL_MAP: Record<string, { modalId: string; label: string }> = {
+        mention_requests:          { modalId: "modal_mention_requests",           label: "منشن طلبات"       },
+        mention_here_requests:     { modalId: "modal_mention_here_requests",      label: "منشن هير طلبات"   },
+        mention_everyone_requests: { modalId: "modal_mention_everyone_requests",  label: "منشن إيفري طلبات" },
+      };
+      const earlyKey = interaction.customId.replace("quickbuy_addon_", "");
+      if (earlyKey in ORDERS_MODAL_MAP) {
+        const cfg   = ORDERS_MODAL_MAP[earlyKey]!;
+        const modal = new ModalBuilder()
+          .setCustomId(cfg.modalId)
+          .setTitle(`شراء ${cfg.label}`);
+        const qtyInput = new TextInputBuilder()
+          .setCustomId("mention_qty")
+          .setLabel("عايز تشتري كم منشن")
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder("1")
+          .setRequired(true)
+          .setMinLength(1)
+          .setMaxLength(5);
+        modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(qtyInput));
+        await interaction.showModal(modal);
+        return;
+      }
+    }
+
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const userId = interaction.user.id;
 
@@ -5164,30 +5191,6 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
         return;
       }
       await createAutoPublishTicket(interaction, interaction.guild!, userId, interaction.user.username);
-      return;
-    }
-
-    // ── منشنات الطلبيات — نفس flow الـ buy_mention_* (modal → transfer channel) ──
-    const REQUESTS_MENTION_MODAL: Record<string, { modalId: string; label: string }> = {
-      mention_requests:          { modalId: "modal_mention_requests",          label: "منشن طلبات"       },
-      mention_here_requests:     { modalId: "modal_mention_here_requests",     label: "منشن هير طلبات"   },
-      mention_everyone_requests: { modalId: "modal_mention_everyone_requests", label: "منشن إيفري طلبات" },
-    };
-    if (addonKey in REQUESTS_MENTION_MODAL) {
-      const cfg   = REQUESTS_MENTION_MODAL[addonKey]!;
-      const modal = new ModalBuilder()
-        .setCustomId(cfg.modalId)
-        .setTitle(`شراء ${cfg.label}`);
-      const qtyInput = new TextInputBuilder()
-        .setCustomId("mention_qty")
-        .setLabel("عايز تشتري كم منشن")
-        .setStyle(TextInputStyle.Short)
-        .setPlaceholder("1")
-        .setRequired(true)
-        .setMinLength(1)
-        .setMaxLength(5);
-      modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(qtyInput));
-      await interaction.showModal(modal);
       return;
     }
 
