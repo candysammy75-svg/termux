@@ -285,7 +285,7 @@ function joinAfkVoiceChannel(guild: import("discord.js").Guild) {
 //  NOTE: الـ Map بتتمسح لو البوت restart — لكن ده معقول لأن الـ window دقيقتين بس.
 // ══════════════════════════════════════════════════════════════════════════════
 
-type MentionKey = "here" | "everyone" | "shop" | "orders" | "auction";
+type MentionKey = "here" | "everyone" | "shop" | "orders" | "auction" | "requests" | "here_requests" | "everyone_requests";
 
 interface PendingMentionPurchase {
   userId:      string;
@@ -3241,10 +3241,13 @@ client.on(Events.MessageCreate, async (message: Message) => {
             await cancelPendingMentionPurchase(matchedMention.userId, false);
             const buyer      = await getOrCreateUser(matchedMention.userId, matchedMention.username);
             const balKey     =
-              matchedMention.mentionKey === "here"     ? "hereBalance" :
-              matchedMention.mentionKey === "everyone" ? "everyoneBalance" :
-              matchedMention.mentionKey === "orders"   ? "ordersBalance" :
-              matchedMention.mentionKey === "auction"  ? "auctionBalance" : "offersBalance";
+              matchedMention.mentionKey === "here"            ? "hereBalance" :
+              matchedMention.mentionKey === "everyone"        ? "everyoneBalance" :
+              matchedMention.mentionKey === "orders"          ? "ordersBalance" :
+              matchedMention.mentionKey === "requests"        ? "ordersBalance" :
+              matchedMention.mentionKey === "here_requests"   ? "hereBalance" :
+              matchedMention.mentionKey === "everyone_requests" ? "everyoneBalance" :
+              matchedMention.mentionKey === "auction"         ? "auctionBalance" : "offersBalance";
             const newBalance = buyer[balKey] + matchedMention.qty;
 
             await db.update(botUsersTable)
@@ -5164,15 +5167,36 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
       return;
     }
 
-    // ── الإضافات اللي مالهاش أوتوميشن (تغيير نوع/مالك المتجر، طلبات المنشن) ──
+    // ── منشنات الطلبيات — نفس flow الـ buy_mention_* (modal → transfer channel) ──
+    const REQUESTS_MENTION_MODAL: Record<string, { modalId: string; label: string }> = {
+      mention_requests:          { modalId: "modal_mention_requests",          label: "منشن طلبات"       },
+      mention_here_requests:     { modalId: "modal_mention_here_requests",     label: "منشن هير طلبات"   },
+      mention_everyone_requests: { modalId: "modal_mention_everyone_requests", label: "منشن إيفري طلبات" },
+    };
+    if (addonKey in REQUESTS_MENTION_MODAL) {
+      const cfg   = REQUESTS_MENTION_MODAL[addonKey]!;
+      const modal = new ModalBuilder()
+        .setCustomId(cfg.modalId)
+        .setTitle(`شراء ${cfg.label}`);
+      const qtyInput = new TextInputBuilder()
+        .setCustomId("mention_qty")
+        .setLabel("عايز تشتري كم منشن")
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder("1")
+        .setRequired(true)
+        .setMinLength(1)
+        .setMaxLength(5);
+      modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(qtyInput));
+      await interaction.showModal(modal);
+      return;
+    }
+
+    // ── الإضافات اللي مالهاش أوتوميشن (تغيير نوع/مالك المتجر) ──────────────
     // NOTE: دول مفيش لهم دفع تلقائي — التنفيذ بيتم يدوياً من الإدارة، فبنفتح
     //       تذكرة طلب بدل ما نودّي على زرار دفع مش موجود.
     const REQUEST_TICKET_ADDONS: Record<string, string> = {
-      change_store_type:         "🔄 طلب تغيير نوع المتجر",
-      change_store_owner:        "👤 طلب تغيير مالك المتجر",
-      mention_requests:          "🔔 طلب منشن عروض",
-      mention_here_requests:     "📣 طلب منشن هير",
-      mention_everyone_requests: "📢 طلب منشن إيفري",
+      change_store_type:  "🔄 طلب تغيير نوع المتجر",
+      change_store_owner: "👤 طلب تغيير مالك المتجر",
     };
 
     if (addonKey in REQUEST_TICKET_ADDONS) {
@@ -5285,11 +5309,11 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
 
     // ── حالة خاصة: أزرار أسعار المنشنات — كل زرار يعرض سعره فقط + زر شراء ──
     const MENTION_BUY_KEYS: Record<string, { price: number; label: string; buyId: string }> = {
-      mention_here:     { price: 5_000_000,  label: "@here",                    buyId: "buy_mention_here"     },
-      mention_everyone: { price: 15_000_000, label: "@everyone",                buyId: "buy_mention_everyone" },
-      mention_shop:     { price: 8_000_000,  label: `<@&${OFFERS_ROLE_ID}>`,    buyId: "buy_mention_shop"     },
-      mention_orders:   { price: 5_000_000,  label: `<@&${ORDERS_ROLE_ID}>`,    buyId: "buy_mention_orders"   },
-      mention_auction:  { price: 3_000_000,  label: `<@&${AUCTION_ROLE_ID}>`,   buyId: "buy_mention_auction"  },
+      mention_here:             { price: 10_000_000, label: "@here",                    buyId: "buy_mention_here"     },
+      mention_everyone:         { price: 15_000_000, label: "@everyone",                buyId: "buy_mention_everyone" },
+      mention_shop:             { price:  2_000_000, label: `<@&${OFFERS_ROLE_ID}>`,    buyId: "buy_mention_shop"     },
+      mention_orders:           { price:  1_000_000, label: `<@&${ORDERS_ROLE_ID}>`,    buyId: "buy_mention_orders"   },
+      mention_auction:          { price:  7_000_000, label: `<@&${AUCTION_ROLE_ID}>`,   buyId: "buy_mention_auction"  },
     };
 
     if (key in MENTION_BUY_KEYS) {
@@ -5622,11 +5646,11 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
 
   // ── أزرار شراء منشن (buy_mention_*) → يفتح مودال الكمية فقط (النوع معروف) ──
   const MENTION_BUY_CONFIG: Record<string, { price: number; label: string; modalId: string }> = {
-    buy_mention_here:     { price: 5_000_000,  label: "@here",    modalId: "modal_mention_here"     },
-    buy_mention_everyone: { price: 15_000_000, label: "@everyone", modalId: "modal_mention_everyone" },
-    buy_mention_shop:     { price: 8_000_000,  label: "@offers",  modalId: "modal_mention_shop"     },
-    buy_mention_orders:   { price: 5_000_000,  label: "طلبيات",   modalId: "modal_mention_orders"   },
-    buy_mention_auction:  { price: 3_000_000,  label: "مزاد",     modalId: "modal_mention_auction"  },
+    buy_mention_here:     { price: 10_000_000, label: "@here",            modalId: "modal_mention_here"     },
+    buy_mention_everyone: { price: 15_000_000, label: "@everyone",        modalId: "modal_mention_everyone" },
+    buy_mention_shop:     { price:  2_000_000, label: "@offers",          modalId: "modal_mention_shop"     },
+    buy_mention_orders:   { price:  1_000_000, label: "طلبيات",           modalId: "modal_mention_orders"   },
+    buy_mention_auction:  { price:  7_000_000, label: "مزاد",             modalId: "modal_mention_auction"  },
   };
 
   if (interaction.isButton() && interaction.customId in MENTION_BUY_CONFIG) {
@@ -5651,11 +5675,14 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
 
   // ── مودال شراء منشن (modal_mention_*) ───────────────────────────────────
   const MENTION_MODAL_CONFIG: Record<string, { price: number; label: string }> = {
-    modal_mention_here:     { price: 5_000_000,  label: "@here"    },
-    modal_mention_everyone: { price: 15_000_000, label: "@everyone" },
-    modal_mention_shop:     { price: 8_000_000,  label: "@offers"  },
-    modal_mention_orders:   { price: 5_000_000,  label: "طلبيات"   },
-    modal_mention_auction:  { price: 3_000_000,  label: "مزاد"     },
+    modal_mention_here:             { price: 10_000_000, label: "@here"            },
+    modal_mention_everyone:         { price: 15_000_000, label: "@everyone"        },
+    modal_mention_shop:             { price:  2_000_000, label: "@offers"          },
+    modal_mention_orders:           { price:  1_000_000, label: "طلبيات"           },
+    modal_mention_auction:          { price:  7_000_000, label: "مزاد"             },
+    modal_mention_requests:         { price:  1_000_000, label: "منشن طلبات"       },
+    modal_mention_here_requests:    { price:  8_000_000, label: "منشن هير طلبات"   },
+    modal_mention_everyone_requests:{ price: 15_000_000, label: "منشن إيفري طلبات" },
   };
 
   if (interaction.isModalSubmit() && interaction.customId in MENTION_MODAL_CONFIG) {
