@@ -180,7 +180,7 @@ const BUY_EMOJI = {
  *
  *   ADDON_ROW_SIZES يحدد عدد الأزرار في كل صف.
  */
-const ADDON_ROW_SIZES = [4, 4, 3, 3, 3] as const;
+const ADDON_ROW_SIZES = [4, 4, 4, 3, 3] as const;
 
 const ADDONS = [
   // ── Row 1 (شاشة L→R: منشن إيفري | منشن هير | منشن عروض | تفعيل المتجر) ──
@@ -4965,6 +4965,9 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
         new ButtonBuilder().setCustomId("buy_mention_here").setLabel("منشن @here").setEmoji(BUY_EMOJI).setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId("buy_mention_shop").setLabel("منشن @offers").setEmoji(BUY_EMOJI).setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId("quickbuy_addon_activate_store").setLabel("تفعيل المتجر").setEmoji(BUY_EMOJI).setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId("buy_auc_mention_everyone").setLabel("منشن إيفري مزاد").setEmoji(BUY_EMOJI).setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId("buy_auc_mention_here").setLabel("منشن هير مزاد").setEmoji(BUY_EMOJI).setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId("buy_auc_mention_offers").setLabel("منشن عروض مزاد").setEmoji(BUY_EMOJI).setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId("quickbuy_addon_change_store_type").setLabel("تغيير نوع المتجر").setEmoji(BUY_EMOJI).setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId("quickbuy_addon_change_store_owner").setLabel("تغيير مالك المتجر").setEmoji(BUY_EMOJI).setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId("quickbuy_addon_remove_partner").setLabel("إزالة شريك").setEmoji(BUY_EMOJI).setStyle(ButtonStyle.Secondary),
@@ -5755,54 +5758,27 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
       "Pending mention purchase created — 2min window"
     );
 
-    const DIV_T        = "ـﮩ════════════════ﮩـ";
-    const guildIconURL = interaction.guild?.iconURL({ extension: "png", size: 256 }) ?? undefined;
-    const transferFiles: AttachmentBuilder[] = [];
-
-    const resultEmbed = new EmbedBuilder()
-      .setAuthor({ name: "Dragon $hop", iconURL: guildIconURL })
-      .setTitle(`${STAR_EMOJI} أمر تحويل المنشن`)
-      .setDescription(
-        `> ${MONEY_EMOJI} <@${interaction.user.id}> اتبع الخطوات التالية\n` +
-        `> ${DIV_T}`
-      )
-      .setColor(0xffd700)
-      .addFields(
-        {
-          name:  `${STAR_EMOJI} النوع والكمية`,
-          value: `> ${MONEY_EMOJI} **${cfg.label}** — **${qty}** منشن\n> ${DIV_T}`,
-          inline: false,
-        },
-        {
-          name:  `${STAR_EMOJI} السعر الصافي`,
-          value: `> ${MONEY_EMOJI} **${netPrice.toLocaleString()}** كريدت\n> ${DIV_T}`,
-          inline: false,
-        },
-        {
-          name:  `${STAR_EMOJI} مبلغ التحويل (شامل عمولة 5%)`,
-          value: `> ${MONEY_EMOJI} **${transferAmt.toLocaleString()}** كريدت\n> ${DIV_T}`,
-          inline: false,
-        },
-        {
-          name:  `${STAR_EMOJI} أمر التحويل — انسخه وابعثه في ProBot`,
-          value: `> \`\`\`${cmd}\`\`\`\n> ${DIV_T}`,
-          inline: false,
-        },
-        {
-          name:  `${STAR_EMOJI} المهلة`,
-          value: `> ${MONEY_EMOJI} عندك **دقيقتين** تحول فيهم\n> بعدهم العملية بتتكنسل تلقائياً ⏰\n> ${DIV_T}`,
-          inline: false,
-        },
-      )
-      .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p", iconURL: guildIconURL });
-
-    if (fs.existsSync(DRAGON_TEXT_BANNER_PATH)) {
-      transferFiles.push(new AttachmentBuilder(DRAGON_TEXT_BANNER_PATH, { name: "dragon_text_banner.webp" }));
-      resultEmbed.setImage("attachment://dragon_text_banner.webp");
+    // ── أبعت الأمر في روم التحويلات ─────────────────────────────────────────
+    const transferChannel = interaction.guild?.channels.cache.get(REACTIVATION_CHANNEL_ID) as TextChannel | undefined;
+    if (transferChannel) {
+      const transferEmbed = new EmbedBuilder()
+        .setTitle(`${STAR_EMOJI} طلب منشن`)
+        .setColor(0xffd700)
+        .setDescription(
+          `<@${interaction.user.id}>\n` +
+          `**النوع:** ${cfg.label} × **${qty}**\n` +
+          `**المبلغ (شامل 5%):** ${transferAmt.toLocaleString()} كريدت\n\n` +
+          `\`\`\`${cmd}\`\`\``
+        )
+        .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p" });
+      await transferChannel.send({ embeds: [transferEmbed] });
     }
 
-    await interaction.editReply({ embeds: [resultEmbed], files: transferFiles });
-    await interaction.followUp({ content: `\`${cmd}\``, flags: MessageFlags.Ephemeral });
+    await interaction.editReply({
+      content:
+        `✅ تم إرسال أمر التحويل في <#${REACTIVATION_CHANNEL_ID}>\n` +
+        `عندك **دقيقتين** تحول فيهم وبعدها بتتكنسل تلقائياً ⏰`,
+    });
     return;
   }
 
