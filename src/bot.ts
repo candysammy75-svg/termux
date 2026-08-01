@@ -288,68 +288,36 @@ function joinAfkVoiceChannel(guild: import("discord.js").Guild) {
 type MentionKey = "here" | "everyone" | "shop" | "orders" | "auction" | "requests" | "here_requests" | "everyone_requests";
 
 interface PendingMentionPurchase {
-  userId:      string;
-  username:    string;
-  mentionKey:  MentionKey;
-  label:       string;
-  qty:         number;
-  netPrice:    number;
-  transferAmt: number;
-  guildId:     string;
-  channelId:   string;
-  expiresAt:   number;
-  timeoutId:   ReturnType<typeof setTimeout>;
+  userId:          string;
+  username:        string;
+  mentionKey:      MentionKey;
+  label:           string;
+  qty:             number;
+  netPrice:        number;
+  transferAmt:     number;
+  guildId:         string;
+  ticketChannelId: string;
+  expiresAt:       number;
+  timeoutId:       ReturnType<typeof setTimeout>;
 }
 
 const pendingMentionPurchases = new Map<string, PendingMentionPurchase>();
 
 /**
  * يكنسل عملية شراء منشن معلقة ويمسحها من الـ Map.
- * @param userId  Discord user ID
- * @param notify  لو true يبعت embed في الشانل إن العملية انتهت
+ * لو انتهى الوقت (timeout) بيحذف التكت بصمت من غير ما يبعت رسالة عامة.
  */
-async function cancelPendingMentionPurchase(userId: string, notify: boolean): Promise<void> {
+async function cancelPendingMentionPurchase(userId: string, deleteTicket: boolean): Promise<void> {
   const pending = pendingMentionPurchases.get(userId);
   if (!pending) return;
   clearTimeout(pending.timeoutId);
   pendingMentionPurchases.delete(userId);
-  if (!notify) return;
+  if (!deleteTicket || !pending.ticketChannelId) return;
   try {
-    const ch = await client.channels.fetch(pending.channelId).catch(() => null);
-    if (!ch || !ch.isTextBased() || !("send" in ch)) return;
-    const textCh      = ch as import("discord.js").TextChannel;
-    const guild       = textCh.guild;
-    const guildIconURL = guild?.iconURL({ extension: "png", size: 256 }) ?? undefined;
-    const DIV_X       = "ـﮩ════════════════ﮩـ";
-    const timeoutFiles: import("discord.js").AttachmentBuilder[] = [];
-
-    const timeoutEmbed = new EmbedBuilder()
-      .setAuthor({ name: "Dragon $hop", iconURL: guildIconURL })
-      .setTitle(`⏰ انتهت مهلة شراء المنشن`)
-      .setDescription(`<@${userId}> ${MONEY_EMOJI}\n> ${DIV_X}`)
-      .setColor(0xff4444)
-      .addFields(
-        {
-          name:  `${STAR_EMOJI} العملية`,
-          value: `> ${MONEY_EMOJI} **${pending.label} × ${pending.qty}** منشن\n> ${DIV_X}`,
-          inline: false,
-        },
-        {
-          name:  `${STAR_EMOJI} السبب`,
-          value: `> مفيش تحويل اتعمل خلال دقيقتين\n> لو عايز تشتري تاني، ابدأ عملية الشراء من الأول 🔄\n> ${DIV_X}`,
-          inline: false,
-        },
-      )
-      .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p", iconURL: guildIconURL });
-
-    if (fs.existsSync(DRAGON_BANNER_PATH)) {
-      timeoutFiles.push(new AttachmentBuilder(DRAGON_BANNER_PATH, { name: "dragon_banner.webp" }));
-      timeoutEmbed.setImage("attachment://dragon_banner.webp");
-    }
-
-    await ch.send({ content: `<@${userId}>`, embeds: [timeoutEmbed], files: timeoutFiles });
+    const ch = await client.channels.fetch(pending.ticketChannelId).catch(() => null);
+    if (ch && "delete" in ch) await (ch as import("discord.js").TextChannel).delete("Mention ticket timed out").catch(() => {});
   } catch {
-    // الشانل اتحذف أو البوت مالوش access — تجاهل
+    // الشانل اتحذف بالفعل — تجاهل
   }
 }
 
@@ -3237,17 +3205,19 @@ client.on(Events.MessageCreate, async (message: Message) => {
           }
 
           if (matchedMention) {
-            // ✅ تأكيد شراء المنشن
+            // ✅ تأكيد شراء المنشن — امسح الـ pending وأبعت التأكيد في التكت
+            const ticketChId = matchedMention.ticketChannelId;
             await cancelPendingMentionPurchase(matchedMention.userId, false);
-            const buyer      = await getOrCreateUser(matchedMention.userId, matchedMention.username);
-            const balKey     =
-              matchedMention.mentionKey === "here"            ? "hereBalance" :
-              matchedMention.mentionKey === "everyone"        ? "everyoneBalance" :
-              matchedMention.mentionKey === "orders"          ? "ordersBalance" :
-              matchedMention.mentionKey === "requests"        ? "ordersBalance" :
-              matchedMention.mentionKey === "here_requests"   ? "hereBalance" :
+
+            const buyer  = await getOrCreateUser(matchedMention.userId, matchedMention.username);
+            const balKey =
+              matchedMention.mentionKey === "here"              ? "hereBalance" :
+              matchedMention.mentionKey === "everyone"          ? "everyoneBalance" :
+              matchedMention.mentionKey === "orders"            ? "ordersBalance" :
+              matchedMention.mentionKey === "requests"          ? "ordersBalance" :
+              matchedMention.mentionKey === "here_requests"     ? "hereBalance" :
               matchedMention.mentionKey === "everyone_requests" ? "everyoneBalance" :
-              matchedMention.mentionKey === "auction"         ? "auctionBalance" : "offersBalance";
+              matchedMention.mentionKey === "auction"           ? "auctionBalance" : "offersBalance";
             const newBalance = buyer[balKey] + matchedMention.qty;
 
             await db.update(botUsersTable)
@@ -3260,25 +3230,24 @@ client.on(Events.MessageCreate, async (message: Message) => {
               "Mention purchase completed via ProBot transfer"
             );
 
-            const DIV_C        = "ـﮩ════════════════ﮩـ";
-            const guildIconURL = message.guild?.iconURL({ extension: "png", size: 256 }) ?? undefined;
-            const confirmFiles: AttachmentBuilder[] = [];
-            const confirmEmbed = new EmbedBuilder()
-              .setAuthor({ name: "Dragon $hop", iconURL: guildIconURL })
-              .setTitle(`${STAR_EMOJI} تم تأكيد شراء المنشن!`)
-              .setDescription(`<@${matchedMention.userId}> ${MONEY_EMOJI}\n> ${DIV_C}`)
-              .setColor(0x00ff88)
-              .addFields(
-                { name: `${STAR_EMOJI} النوع`,         value: `> ${MONEY_EMOJI} **${matchedMention.label}**\n> ${DIV_C}`,           inline: false },
-                { name: `${STAR_EMOJI} الكمية`,         value: `> ${MONEY_EMOJI} **${matchedMention.qty}** منشن\n> ${DIV_C}`,        inline: false },
-                { name: `${STAR_EMOJI} رصيدك الجديد`,  value: `> ${MONEY_EMOJI} **${newBalance}** منشن\n> ${DIV_C}`,                 inline: false },
-              )
-              .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p", iconURL: guildIconURL });
-            if (fs.existsSync(DRAGON_BANNER_PATH)) {
-              confirmFiles.push(new AttachmentBuilder(DRAGON_BANNER_PATH, { name: "dragon_banner.webp" }));
-              confirmEmbed.setImage("attachment://dragon_banner.webp");
-            }
-            await channel.send({ embeds: [confirmEmbed], files: confirmFiles });
+            // ابعت التأكيد في التكت وبعدين احذفه
+            try {
+              const ticketCh = await client.channels.fetch(ticketChId).catch(() => null) as TextChannel | null;
+              if (ticketCh) {
+                const confirmEmbed = new EmbedBuilder()
+                  .setTitle(`${STAR_EMOJI} تم تأكيد شراء المنشن! ✅`)
+                  .setColor(0x00ff88)
+                  .setDescription(
+                    `<@${matchedMention.userId}>\n` +
+                    `**النوع:** ${matchedMention.label} × **${matchedMention.qty}**\n` +
+                    `**رصيدك الجديد:** ${newBalance} منشن\n\n` +
+                    `التذكرة هتقفل خلال ثوان ⏳`
+                  )
+                  .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p" });
+                await ticketCh.send({ content: `<@${matchedMention.userId}>`, embeds: [confirmEmbed] });
+                setTimeout(() => ticketCh.delete("Mention purchase confirmed").catch(() => {}), 5000);
+              }
+            } catch { /* تجاهل لو التكت اتحذف */ }
             return;
           }
 
@@ -5729,56 +5698,84 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
     const netPrice    = cfg.price * qty;
     const transferAmt = calcTransferAmount(netPrice);
     const cmd         = `C <@${OWNER_ID}> ${transferAmt}`;
-
-    // ── أضف العملية للـ pending map مع timeout دقيقتين ──────────────────
-    // NOTE: الـ mentionKey بيتعمل extract من modalId (modal_mention_here → "here")
     const mentionKey  = interaction.customId.replace("modal_mention_", "") as MentionKey;
-    const expiresAt   = Date.now() + 2 * 60 * 1000;
-    const timeoutId   = setTimeout(
-      () => cancelPendingMentionPurchase(interaction.user.id, true),
-      2 * 60 * 1000
+    const guild       = interaction.guild!;
+    const userId      = interaction.user.id;
+
+    // ── افتح تكت أوتوماتيك ───────────────────────────────────────────────────
+    const ticketName = `${cfg.label.replace(/\s+/g, "-")}-${interaction.user.username}`.slice(0, 100);
+    const ticketChannel = await guild.channels.create({
+      name:   ticketName,
+      type:   ChannelType.GuildText,
+      parent: "1525196365045563483",
+      permissionOverwrites: [
+        { id: guild.id,   deny:  [PermissionFlagsBits.ViewChannel] },
+        { id: userId,     allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] },
+      ],
+    });
+
+    // ── أضف العملية للـ pending map (5 دقايق) ───────────────────────────────
+    const expiresAt = Date.now() + 5 * 60 * 1000;
+    const timeoutId = setTimeout(
+      () => cancelPendingMentionPurchase(userId, true),
+      5 * 60 * 1000
     );
 
-    pendingMentionPurchases.set(interaction.user.id, {
-      userId:      interaction.user.id,
-      username:    interaction.user.username,
+    pendingMentionPurchases.set(userId, {
+      userId,
+      username:        interaction.user.username,
       mentionKey,
-      label:       cfg.label,
+      label:           cfg.label,
       qty,
       netPrice,
       transferAmt,
-      guildId:     interaction.guildId ?? "",
-      channelId:   interaction.channelId ?? "",
+      guildId:         guild.id,
+      ticketChannelId: ticketChannel.id,
       expiresAt,
       timeoutId,
     });
 
-    logger.info(
-      { userId: interaction.user.id, mentionKey, qty, transferAmt },
-      "Pending mention purchase created — 2min window"
-    );
+    logger.info({ userId, mentionKey, qty, transferAmt }, "Pending mention purchase created — ticket opened");
 
-    // ── أبعت الأمر في روم التحويلات ─────────────────────────────────────────
-    const transferChannel = interaction.guild?.channels.cache.get(REACTIVATION_CHANNEL_ID) as TextChannel | undefined;
-    if (transferChannel) {
-      const transferEmbed = new EmbedBuilder()
-        .setTitle(`${STAR_EMOJI} طلب منشن`)
-        .setColor(0xffd700)
-        .setDescription(
-          `<@${interaction.user.id}>\n` +
-          `**النوع:** ${cfg.label} × **${qty}**\n` +
-          `**المبلغ (شامل 5%):** ${transferAmt.toLocaleString()} كريدت\n\n` +
-          `\`\`\`${cmd}\`\`\``
-        )
-        .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p" });
-      await transferChannel.send({ embeds: [transferEmbed] });
-    }
+    // ── ابعت الأمر جوّه التكت ────────────────────────────────────────────────
+    const ticketEmbed = new EmbedBuilder()
+      .setTitle(`${STAR_EMOJI} طلب منشن — ${cfg.label}`)
+      .setColor(0xffd700)
+      .setDescription(
+        `<@${userId}>\n` +
+        `**النوع:** ${cfg.label} × **${qty}**\n` +
+        `**المبلغ (شامل 5%):** ${transferAmt.toLocaleString()} كريدت\n\n` +
+        `\`\`\`${cmd}\`\`\`\n` +
+        `⏰ عندك **5 دقايق** تحول فيهم`
+      )
+      .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p" });
 
-    await interaction.editReply({
-      content:
-        `✅ تم إرسال أمر التحويل في <#${REACTIVATION_CHANNEL_ID}>\n` +
-        `عندك **دقيقتين** تحول فيهم وبعدها بتتكنسل تلقائياً ⏰`,
+    const closeBtn = new ButtonBuilder()
+      .setCustomId(`close_mention_ticket_${userId}`)
+      .setLabel("🔒 إلغاء الطلب")
+      .setStyle(ButtonStyle.Danger);
+
+    await ticketChannel.send({
+      content:    `<@${userId}>`,
+      embeds:     [ticketEmbed],
+      components: [new ActionRowBuilder<ButtonBuilder>().addComponents(closeBtn)],
     });
+
+    await interaction.editReply({ content: `✅ تم إنشاء تذكرة الطلب! <#${ticketChannel.id}>` });
+    return;
+  }
+
+  // ── زرار إلغاء تكت منشن (close_mention_ticket_*) ─────────────────────────
+  if (interaction.isButton() && interaction.customId.startsWith("close_mention_ticket_")) {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    const ownerId = interaction.customId.replace("close_mention_ticket_", "");
+    if (interaction.user.id !== ownerId) {
+      await interaction.editReply({ content: "❌ الزرار ده مش بتاعك." });
+      return;
+    }
+    await cancelPendingMentionPurchase(ownerId, false);
+    await interaction.editReply({ content: "🔒 تم إلغاء الطلب — التذكرة هتقفل دلوقتي." });
+    setTimeout(() => (interaction.channel as TextChannel)?.delete("Mention ticket cancelled").catch(() => {}), 3000);
     return;
   }
 
