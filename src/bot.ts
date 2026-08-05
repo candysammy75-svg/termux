@@ -8658,9 +8658,14 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
   if (interaction.commandName === "testing") {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-    // أونر فقط
-    if (interaction.user.id !== OWNER_ID) {
-      await interaction.editReply({ content: "❌ هذا الأمر للأونر فقط." });
+    // أونر أو حامل رتبة التجربة
+    const TESTING_ROLE_ID = "1518682779083079731";
+    const member = interaction.guild?.members.cache.get(interaction.user.id)
+                ?? await interaction.guild?.members.fetch(interaction.user.id).catch(() => null);
+    const hasTestingRole = member?.roles.cache.has(TESTING_ROLE_ID) ?? false;
+
+    if (interaction.user.id !== OWNER_ID && !hasTestingRole) {
+      await interaction.editReply({ content: "❌ محتاج رتبة التجربة أو تكون الأونر عشان تستخدم الأمر ده." });
       return;
     }
 
