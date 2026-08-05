@@ -88,6 +88,19 @@ if (!OWNER_ID) throw new Error("OWNER_ID is required but not set");
 if (!GUILD_ID) throw new Error("GUILD_ID is required but not set");
 
 // ══════════════════════════════════════════════════════════════════════════════
+//  Testing Mode — وضع التجربة
+//  NOTE: يخلي كل الأسعار بـ 1 كريدت مؤقتاً للتجربة.
+//        الأسعار الأصلية بتتحفظ في الذاكرة وبترجع تلقائياً بـ /testing mode end.
+//  ⚠️  لو البوت اتقفل وهو في وضع التجربة، الأسعار هترجع من DB مش من الذاكرة.
+//      استخدم /testing mode end قبل ما تقفل البوت.
+// ══════════════════════════════════════════════════════════════════════════════
+let isTestingMode = false;
+/** roomId → originalPrice (كـ string زي ما بيتخزن في DB) */
+const testingSavedRoomPrices   = new Map<number, string>();
+/** addonKey → originalPrice (كـ string) */
+const testingSavedAddonPrices  = new Map<string, string>();
+
+// ══════════════════════════════════════════════════════════════════════════════
 //  ProBot — إعدادات التحويل
 //  NOTE: PROBOT_USER_ID ده الـ ID الرسمي لبوت ProBot.
 //        البوت بيرفض أي رسالة من بوت تاني حتى لو جاي من نفس الشانل،
@@ -2983,6 +2996,26 @@ client.once(Events.ClientReady, async () => {
     new SlashCommandBuilder()
       .setName("rolespanel")
       .setDescription("📋 [أونر] ابعت بانل اختيار رتب الإشعارات في الشانل الحالي"),
+
+    // ── وضع التجربة ───────────────────────────────────────────────────────────
+    new SlashCommandBuilder()
+      .setName("testing")
+      .setDescription("🧪 [أونر] التحكم في وضع التجربة")
+      .addSubcommand((sub) =>
+        sub
+          .setName("mode")
+          .setDescription("تشغيل أو إيقاف وضع التجربة")
+          .addStringOption((o) =>
+            o
+              .setName("action")
+              .setDescription("start = تشغيل | end = إيقاف")
+              .setRequired(true)
+              .addChoices(
+                { name: "start — تشغيل وضع التجربة (كل الأسعار بـ 1 كريدت)", value: "start" },
+                { name: "end   — إيقاف وضع التجربة وإعادة الأسعار الأصلية",  value: "end"   },
+              )
+          )
+      ),
   ];
 
   const rest = new REST({ version: "10" }).setToken(TOKEN);
@@ -8619,6 +8652,89 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
     const balance = await getUserPoints(interaction.user.id);
     await interaction.editReply({ content: `💠 رصيدك من النقاط: **${balance.toLocaleString()}** نقطة.` });
     return;
+  }
+
+  // ── /testing mode ─────────────────────────────────────────────────────────
+  if (interaction.commandName === "testing") {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    // أونر فقط
+    if (interaction.user.id !== OWNER_ID) {
+      await interaction.editReply({ content: "❌ هذا الأمر للأونر فقط." });
+      return;
+    }
+
+    const action = interaction.options.getString("action", true) as "start" | "end";
+
+    // ── /testing mode start ──────────────────────────────────────────────────
+    if (action === "start") {
+      if (isTestingMode) {
+        await interaction.editReply({ content: "⚠️ وضع التجربة شغّال بالفعل. استخدم `/testing mode end` عشان توقفه وترجع الأسعار." });
+        return;
+      }
+
+      // احفظ أسعار الرومات من DB ثم حوّلها كلها لـ 1
+      const allRooms = await db.select().from(roomsTable);
+      testingSavedRoomPrices.clear();
+      for (const room of allRooms) {
+        testingSavedRoomPrices.set(room.id, room.price);
+        await db.update(roomsTable).set({ price: "1" }).where(eq(roomsTable.id, room.id));
+      }
+
+      // احفظ أسعار الإضافات من DB ثم حوّلها كلها لـ 1
+      const allAddons = await db.select().from(addonPricesTable);
+      testingSavedAddonPrices.clear();
+      for (const addon of allAddons) {
+        testingSavedAddonPrices.set(addon.key, addon.price);
+        await db.update(addonPricesTable).set({ price: "1" }).where(eq(addonPricesTable.key, addon.key));
+      }
+
+      isTestingMode = true;
+      logger.info({ savedRooms: allRooms.length, savedAddons: allAddons.length }, "Testing mode STARTED");
+
+      await interaction.editReply({
+        content:
+          `🧪 **تم تشغيل وضع التجربة!**\n\n` +
+          `✅ تم تغيير **${allRooms.length}** روم و **${allAddons.length}** إضافة إلى سعر **1 كريدت**.\n\n` +
+          `⚠️ لما تخلص تجربتك استخدم \`/testing mode end\` عشان الأسعار ترجع زي ما كانت.`,
+      });
+      return;
+    }
+
+    // ── /testing mode end ────────────────────────────────────────────────────
+    if (action === "end") {
+      if (!isTestingMode) {
+        await interaction.editReply({ content: "⚠️ وضع التجربة مش شغّال أصلاً." });
+        return;
+      }
+
+      let restoredRooms   = 0;
+      let restoredAddons  = 0;
+
+      // ارجع أسعار الرومات
+      for (const [roomId, originalPrice] of testingSavedRoomPrices.entries()) {
+        await db.update(roomsTable).set({ price: originalPrice }).where(eq(roomsTable.id, roomId));
+        restoredRooms++;
+      }
+      testingSavedRoomPrices.clear();
+
+      // ارجع أسعار الإضافات
+      for (const [addonKey, originalPrice] of testingSavedAddonPrices.entries()) {
+        await db.update(addonPricesTable).set({ price: originalPrice }).where(eq(addonPricesTable.key, addonKey));
+        restoredAddons++;
+      }
+      testingSavedAddonPrices.clear();
+
+      isTestingMode = false;
+      logger.info({ restoredRooms, restoredAddons }, "Testing mode ENDED — prices restored");
+
+      await interaction.editReply({
+        content:
+          `✅ **تم إيقاف وضع التجربة!**\n\n` +
+          `🔄 تم إعادة **${restoredRooms}** روم و **${restoredAddons}** إضافة إلى أسعارها الأصلية.`,
+      });
+      return;
+    }
   }
 
   } // end isChatInputCommand block
