@@ -96,9 +96,31 @@ if (!GUILD_ID) throw new Error("GUILD_ID is required but not set");
 // ══════════════════════════════════════════════════════════════════════════════
 let isTestingMode = false;
 /** roomId → originalPrice (كـ string زي ما بيتخزن في DB) */
-const testingSavedRoomPrices   = new Map<number, string>();
+const testingSavedRoomPrices  = new Map<number, string>();
 /** addonKey → originalPrice (كـ string) */
-const testingSavedAddonPrices  = new Map<string, string>();
+const testingSavedAddonPrices = new Map<string, string>();
+/** نسخ احتياطية من الثوابت الـ hardcoded عشان نرجّعها بعد وضع التجربة */
+const testingSavedConstPrices = {
+  warningRemoval:    1_000_000,
+  storeRename:       1_000_000,
+  autoPublishPerDay: 2_000_000,
+  autoLines:         10_000_000,
+  addPartner:        4_000_000,
+  removePartner:     6_000_000,
+  auctionEveryone:   10_000_000,
+  auctionHere:       5_000_000,
+  auctionOffers:     3_000_000,
+  mentionPrices: {
+    here:              10_000_000,
+    everyone:          15_000_000,
+    shop:               2_000_000,
+    orders:             1_000_000,
+    auction:            7_000_000,
+    requests:           1_000_000,
+    here_requests:      8_000_000,
+    everyone_requests: 15_000_000,
+  } as { [K in keyof typeof MENTION_PRICES_DEFAULT]: number },
+};
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  ProBot — إعدادات التحويل
@@ -124,7 +146,7 @@ function calcTransferAmount(netPrice: number): number {
 const REACTIVATION_CHANNEL_ID = "1523817510435164291";
 
 /** سعر إزالة التحذير من المتجر — net قبل عمولة ProBot */
-const WARNING_REMOVAL_PRICE = 1_000_000;
+let WARNING_REMOVAL_PRICE = 1_000_000;
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  AutoMod — الكلمات المحظورة
@@ -348,7 +370,7 @@ async function cancelPendingMentionPurchase(userId: string, deleteTicket: boolea
 // ══════════════════════════════════════════════════════════════════════════════
 
 /** سعر تغيير اسم المتجر بالكريدت */
-const STORE_RENAME_PRICE = 1_000_000;
+let STORE_RENAME_PRICE = 1_000_000;
 
 /**
  * يحوّل المسافات العادية (ASCII 0x20) لـ NO-BREAK SPACE (U+00A0)
@@ -451,7 +473,7 @@ const pendingRemovePartners = new Map<string, PendingRemovePartner>();
 // ══════════════════════════════════════════════════════════════════════════════
 
 /** سعر النشر التلقائي بالكريدت في اليوم الواحد */
-const AUTO_PUBLISH_PRICE_PER_DAY = 2_000_000;
+let AUTO_PUBLISH_PRICE_PER_DAY = 2_000_000;
 
 /** فترة النشر — كل 6 ساعات */
 const AUTO_PUBLISH_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -506,7 +528,7 @@ const pendingAutoPublishReady = new Map<string, { storePurchaseId: number; days:
 // ══════════════════════════════════════════════════════════════════════════════
 
 /** سعر خدمة تلقائي للخطوط */
-const AUTO_LINES_PRICE = 10_000_000;
+let AUTO_LINES_PRICE = 10_000_000;
 
 /** مهلة انتظار الصورة بعد تأكيد الدفع */
 const AUTO_LINES_IMAGE_TIMEOUT_MS = 10 * 60 * 1000; // 10 دقايق
@@ -1796,12 +1818,12 @@ const AUCTION_CATEGORY_ID = "1523801337933074688";
 const AUCTION_INFO_CHANNEL_ID = "1523801349655888076";
 
 /** أنواع المزاد وأسعارها (سعر صافي بدون عمولة ProBot) */
-const AUCTION_TYPES = {
+type AuctionType = "everyone" | "here" | "offers";
+const AUCTION_TYPES: Record<AuctionType, { label: string; emoji: string; price: number }> = {
   everyone: { label: "@everyone", emoji: "📢", price: 10_000_000 },
   here:     { label: "@here",     emoji: "📣", price: 5_000_000  },
   offers:   { label: "@مزاد",     emoji: "🔔", price: 3_000_000  },
-} as const;
-type AuctionType = keyof typeof AUCTION_TYPES;
+};
 
 /**
  * IDs رسائل شانل المزاد الثابتة (تتعبى من الشانل عند كل restart).
@@ -1819,8 +1841,21 @@ let lastScheduleSentDate: string | null = null;
 //       لو الرصيد خلص أو الكولداون شغال → البوت يسحب الرول → "Failed to send".
 const MENTION_ACTIVE_ROLE_NAME = "منشن مفعّل";
 const MENTION_COOLDOWN_MS      = 30 * 60 * 1000; // 30 دقيقة كولداون بعد كل منشن
-const ADD_PARTNER_PRICE        = 4_000_000;        // سعر إضافة شريك
-const REMOVE_PARTNER_PRICE     = 6_000_000;        // سعر إزالة شريك
+let ADD_PARTNER_PRICE        = 4_000_000;        // سعر إضافة شريك
+let REMOVE_PARTNER_PRICE     = 6_000_000;        // سعر إزالة شريك
+
+// ── أسعار المنشنات — مركزية عشان وضع التجربة يقدر يعدّلها ─────────────────
+const MENTION_PRICES_DEFAULT = {
+  here:               10_000_000,
+  everyone:           15_000_000,
+  shop:                2_000_000,
+  orders:              1_000_000,
+  auction:             7_000_000,
+  requests:            1_000_000,
+  here_requests:       8_000_000,
+  everyone_requests:  15_000_000,
+} as const;
+let MENTION_PRICES = { ...MENTION_PRICES_DEFAULT } as { [K in keyof typeof MENTION_PRICES_DEFAULT]: number };
 let   mentionActiveRoleId: string | null = null;
 
 /**
@@ -5317,11 +5352,11 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
 
     // ── حالة خاصة: أزرار أسعار المنشنات — كل زرار يعرض سعره فقط + زر شراء ──
     const MENTION_BUY_KEYS: Record<string, { price: number; label: string; buyId: string }> = {
-      mention_here:             { price: 10_000_000, label: "@here",                    buyId: "buy_mention_here"     },
-      mention_everyone:         { price: 15_000_000, label: "@everyone",                buyId: "buy_mention_everyone" },
-      mention_shop:             { price:  2_000_000, label: `<@&${OFFERS_ROLE_ID}>`,    buyId: "buy_mention_shop"     },
-      mention_orders:           { price:  1_000_000, label: `<@&${ORDERS_ROLE_ID}>`,    buyId: "buy_mention_orders"   },
-      mention_auction:          { price:  7_000_000, label: `<@&${AUCTION_ROLE_ID}>`,   buyId: "buy_mention_auction"  },
+      mention_here:             { price: MENTION_PRICES.here,     label: "@here",                    buyId: "buy_mention_here"     },
+      mention_everyone:         { price: MENTION_PRICES.everyone, label: "@everyone",                buyId: "buy_mention_everyone" },
+      mention_shop:             { price: MENTION_PRICES.shop,     label: `<@&${OFFERS_ROLE_ID}>`,    buyId: "buy_mention_shop"     },
+      mention_orders:           { price: MENTION_PRICES.orders,   label: `<@&${ORDERS_ROLE_ID}>`,    buyId: "buy_mention_orders"   },
+      mention_auction:          { price: MENTION_PRICES.auction,  label: `<@&${AUCTION_ROLE_ID}>`,   buyId: "buy_mention_auction"  },
     };
 
     if (key in MENTION_BUY_KEYS) {
@@ -5654,11 +5689,11 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
 
   // ── أزرار شراء منشن (buy_mention_*) → يفتح مودال الكمية فقط (النوع معروف) ──
   const MENTION_BUY_CONFIG: Record<string, { price: number; label: string; modalId: string }> = {
-    buy_mention_here:     { price: 10_000_000, label: "@here",            modalId: "modal_mention_here"     },
-    buy_mention_everyone: { price: 15_000_000, label: "@everyone",        modalId: "modal_mention_everyone" },
-    buy_mention_shop:     { price:  2_000_000, label: "@offers",          modalId: "modal_mention_shop"     },
-    buy_mention_orders:   { price:  1_000_000, label: "طلبيات",           modalId: "modal_mention_orders"   },
-    buy_mention_auction:  { price:  7_000_000, label: "مزاد",             modalId: "modal_mention_auction"  },
+    buy_mention_here:     { price: MENTION_PRICES.here,     label: "@here",     modalId: "modal_mention_here"     },
+    buy_mention_everyone: { price: MENTION_PRICES.everyone, label: "@everyone", modalId: "modal_mention_everyone" },
+    buy_mention_shop:     { price: MENTION_PRICES.shop,     label: "@offers",   modalId: "modal_mention_shop"     },
+    buy_mention_orders:   { price: MENTION_PRICES.orders,   label: "طلبيات",    modalId: "modal_mention_orders"   },
+    buy_mention_auction:  { price: MENTION_PRICES.auction,  label: "مزاد",      modalId: "modal_mention_auction"  },
   };
 
   if (interaction.isButton() && interaction.customId in MENTION_BUY_CONFIG) {
@@ -5683,14 +5718,14 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
 
   // ── مودال شراء منشن (modal_mention_*) ───────────────────────────────────
   const MENTION_MODAL_CONFIG: Record<string, { price: number; label: string }> = {
-    modal_mention_here:             { price: 10_000_000, label: "@here"            },
-    modal_mention_everyone:         { price: 15_000_000, label: "@everyone"        },
-    modal_mention_shop:             { price:  2_000_000, label: "@offers"          },
-    modal_mention_orders:           { price:  1_000_000, label: "طلبيات"           },
-    modal_mention_auction:          { price:  7_000_000, label: "مزاد"             },
-    modal_mention_requests:         { price:  1_000_000, label: "منشن طلبات"       },
-    modal_mention_here_requests:    { price:  8_000_000, label: "منشن هير طلبات"   },
-    modal_mention_everyone_requests:{ price: 15_000_000, label: "منشن إيفري طلبات" },
+    modal_mention_here:             { price: MENTION_PRICES.here,              label: "@here"            },
+    modal_mention_everyone:         { price: MENTION_PRICES.everyone,          label: "@everyone"        },
+    modal_mention_shop:             { price: MENTION_PRICES.shop,              label: "@offers"          },
+    modal_mention_orders:           { price: MENTION_PRICES.orders,            label: "طلبيات"           },
+    modal_mention_auction:          { price: MENTION_PRICES.auction,           label: "مزاد"             },
+    modal_mention_requests:         { price: MENTION_PRICES.requests,          label: "منشن طلبات"       },
+    modal_mention_here_requests:    { price: MENTION_PRICES.here_requests,     label: "منشن هير طلبات"   },
+    modal_mention_everyone_requests:{ price: MENTION_PRICES.everyone_requests, label: "منشن إيفري طلبات" },
   };
 
   if (interaction.isModalSubmit() && interaction.customId in MENTION_MODAL_CONFIG) {
@@ -8678,7 +8713,7 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
         return;
       }
 
-      // احفظ أسعار الرومات من DB ثم حوّلها كلها لـ 1
+      // ── 1. احفظ أسعار الرومات من DB ثم حوّلها لـ 1 ─────────────────────────
       const allRooms = await db.select().from(roomsTable);
       testingSavedRoomPrices.clear();
       for (const room of allRooms) {
@@ -8686,12 +8721,37 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
         await db.update(roomsTable).set({ price: "1" }).where(eq(roomsTable.id, room.id));
       }
 
-      // احفظ أسعار الإضافات من DB ثم حوّلها كلها لـ 1
+      // ── 2. احفظ أسعار الإضافات من DB ثم حوّلها لـ 1 ─────────────────────
       const allAddons = await db.select().from(addonPricesTable);
       testingSavedAddonPrices.clear();
       for (const addon of allAddons) {
         testingSavedAddonPrices.set(addon.key, addon.price);
         await db.update(addonPricesTable).set({ price: "1" }).where(eq(addonPricesTable.key, addon.key));
+      }
+
+      // ── 3. احفظ المتغيرات الثابتة وحوّلها لـ 1 ──────────────────────────
+      testingSavedConstPrices.warningRemoval        = WARNING_REMOVAL_PRICE;
+      testingSavedConstPrices.storeRename           = STORE_RENAME_PRICE;
+      testingSavedConstPrices.autoPublishPerDay     = AUTO_PUBLISH_PRICE_PER_DAY;
+      testingSavedConstPrices.autoLines             = AUTO_LINES_PRICE;
+      testingSavedConstPrices.addPartner            = ADD_PARTNER_PRICE;
+      testingSavedConstPrices.removePartner         = REMOVE_PARTNER_PRICE;
+      testingSavedConstPrices.auctionEveryone       = AUCTION_TYPES.everyone.price;
+      testingSavedConstPrices.auctionHere           = AUCTION_TYPES.here.price;
+      testingSavedConstPrices.auctionOffers         = AUCTION_TYPES.offers.price;
+      testingSavedConstPrices.mentionPrices         = { ...MENTION_PRICES };
+
+      WARNING_REMOVAL_PRICE           = 1;
+      STORE_RENAME_PRICE              = 1;
+      AUTO_PUBLISH_PRICE_PER_DAY      = 1;
+      AUTO_LINES_PRICE                = 1;
+      ADD_PARTNER_PRICE               = 1;
+      REMOVE_PARTNER_PRICE            = 1;
+      AUCTION_TYPES.everyone.price    = 1;
+      AUCTION_TYPES.here.price        = 1;
+      AUCTION_TYPES.offers.price      = 1;
+      for (const key of Object.keys(MENTION_PRICES) as (keyof typeof MENTION_PRICES)[]) {
+        MENTION_PRICES[key] = 1;
       }
 
       isTestingMode = true;
@@ -8700,7 +8760,7 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
       await interaction.editReply({
         content:
           `🧪 **تم تشغيل وضع التجربة!**\n\n` +
-          `✅ تم تغيير **${allRooms.length}** روم و **${allAddons.length}** إضافة إلى سعر **1 كريدت**.\n\n` +
+          `✅ تم تغيير كل الأسعار (رومات، إضافات، مزادات، منشنات، خدمات) إلى **1 كريدت**.\n\n` +
           `⚠️ لما تخلص تجربتك استخدم \`/testing mode end\` عشان الأسعار ترجع زي ما كانت.`,
       });
       return;
@@ -8713,22 +8773,34 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
         return;
       }
 
-      let restoredRooms   = 0;
-      let restoredAddons  = 0;
+      let restoredRooms  = 0;
+      let restoredAddons = 0;
 
-      // ارجع أسعار الرومات
+      // ── 1. ارجع أسعار الرومات ────────────────────────────────────────────
       for (const [roomId, originalPrice] of testingSavedRoomPrices.entries()) {
         await db.update(roomsTable).set({ price: originalPrice }).where(eq(roomsTable.id, roomId));
         restoredRooms++;
       }
       testingSavedRoomPrices.clear();
 
-      // ارجع أسعار الإضافات
+      // ── 2. ارجع أسعار الإضافات ───────────────────────────────────────────
       for (const [addonKey, originalPrice] of testingSavedAddonPrices.entries()) {
         await db.update(addonPricesTable).set({ price: originalPrice }).where(eq(addonPricesTable.key, addonKey));
         restoredAddons++;
       }
       testingSavedAddonPrices.clear();
+
+      // ── 3. ارجع المتغيرات الثابتة ─────────────────────────────────────────
+      WARNING_REMOVAL_PRICE        = testingSavedConstPrices.warningRemoval;
+      STORE_RENAME_PRICE           = testingSavedConstPrices.storeRename;
+      AUTO_PUBLISH_PRICE_PER_DAY   = testingSavedConstPrices.autoPublishPerDay;
+      AUTO_LINES_PRICE             = testingSavedConstPrices.autoLines;
+      ADD_PARTNER_PRICE            = testingSavedConstPrices.addPartner;
+      REMOVE_PARTNER_PRICE         = testingSavedConstPrices.removePartner;
+      AUCTION_TYPES.everyone.price = testingSavedConstPrices.auctionEveryone;
+      AUCTION_TYPES.here.price     = testingSavedConstPrices.auctionHere;
+      AUCTION_TYPES.offers.price   = testingSavedConstPrices.auctionOffers;
+      Object.assign(MENTION_PRICES, testingSavedConstPrices.mentionPrices);
 
       isTestingMode = false;
       logger.info({ restoredRooms, restoredAddons }, "Testing mode ENDED — prices restored");
@@ -8736,7 +8808,7 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
       await interaction.editReply({
         content:
           `✅ **تم إيقاف وضع التجربة!**\n\n` +
-          `🔄 تم إعادة **${restoredRooms}** روم و **${restoredAddons}** إضافة إلى أسعارها الأصلية.`,
+          `🔄 تم إعادة **${restoredRooms}** روم و **${restoredAddons}** إضافة + كل الأسعار الأخرى إلى قيمها الأصلية.`,
       });
       return;
     }
