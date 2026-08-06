@@ -4636,7 +4636,7 @@ client.on(Events.MessageCreate, async (message: Message) => {
   // ── انتظار اسم الروم بعد تأكيد الدفع ────────────────────────────────────
   // NOTE: بعد ما ProBot يتحقق، الـ status بيبقى "awaiting_room_name".
   //       الرسالة الجاية من نفس اليوزر في نفس الشانل بتعتبر اسم الروم.
-  //       الاسم بيتعمله format تلقائي: `私 ₊˚✧{زخرفة}| {الاسم}`
+  //       الاسم بيتعمله format تلقائي: `𝐃𝐑・⚚{زخرفة}| {الاسم}`
   const pendingPurchase = await db
     .select()
     .from(purchasesTable)
@@ -4662,7 +4662,7 @@ client.on(Events.MessageCreate, async (message: Message) => {
       .where(eq(roomsTable.id, pendingPurchase.roomId));
     if (!room) return;
 
-    const finalName  = `私 ₊˚✧${room.decorations || ""}| ${rawName}`;
+    const finalName  = `𝐃𝐑・⚚${room.decorations || ""}| ${rawName}`;
     const totalPrice = calcTransferAmount(Number(room.price));
 
     await db
