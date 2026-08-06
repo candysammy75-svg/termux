@@ -19,7 +19,12 @@
  */
 
 import { findBadWord } from "./badwords.js";
-import { joinVoiceChannel, VoiceConnectionStatus, entersState } from "@discordjs/voice";
+import {
+  joinVoiceChannel,
+  VoiceConnectionStatus,
+  entersState,
+  type DiscordGatewayAdapterCreator,
+} from "@discordjs/voice";
 import { createCanvas, loadImage } from "@napi-rs/canvas";
 
 import {
@@ -47,6 +52,7 @@ import {
   type Message,
   type Interaction,
   type Guild,
+  type GuildBasedChannel,
   REST,
   Routes,
   SlashCommandBuilder,
@@ -281,7 +287,7 @@ function joinAfkVoiceChannel(guild: import("discord.js").Guild) {
     const connection = joinVoiceChannel({
       channelId: AFK_VOICE_CHANNEL_ID,
       guildId: guild.id,
-      adapterCreator: guild.voiceAdapterCreator,
+      adapterCreator: guild.voiceAdapterCreator as unknown as DiscordGatewayAdapterCreator,
       selfDeaf: true,
       selfMute: true,
     });
@@ -1889,7 +1895,9 @@ const MENTION_PRICES_DEFAULT = {
   here_requests:       8_000_000,
   everyone_requests:  15_000_000,
 } as const;
-let MENTION_PRICES = { ...MENTION_PRICES_DEFAULT } as { [K in keyof typeof MENTION_PRICES_DEFAULT]: number };
+let MENTION_PRICES = { ...MENTION_PRICES_DEFAULT } as {
+  -readonly [K in keyof typeof MENTION_PRICES_DEFAULT]: number;
+};
 let   mentionActiveRoleId: string | null = null;
 
 /**
@@ -3136,10 +3144,10 @@ client.once(Events.ClientReady, async () => {
     //       من غير ما يحتاج يضغط الزرار أو يعيد تشغيل البوت.
     for (const chId of SHOP_PUBLIC_CHANNEL_IDS) {
       const ch = guild.channels.cache.get(chId);
-      if (!ch) continue;
+      if (!ch || !("permissionOverwrites" in ch)) continue;
       await ch.permissionOverwrites
         .edit(DND_ROLE_ID, { ViewChannel: false })
-        .catch((err) => logger.error({ err, chId }, "Failed to set DND deny on static shop channel"));
+        .catch((err: unknown) => logger.error({ err, chId }, "Failed to set DND deny on static shop channel"));
     }
 
     // ── استعادة IDs رسائل شانل المزاد بعد الـ restart ────────────────────
@@ -4201,6 +4209,8 @@ client.on(Events.MessageCreate, async (message: Message) => {
       id:                   purchasesTable.id,
       ownerId:              purchasesTable.discordUserId,
       partnerDiscordUserId: purchasesTable.partnerDiscordUserId,
+      roomWarningCount:     purchasesTable.roomWarningCount,
+      isRoomDeactivated:    purchasesTable.isRoomDeactivated,
     })
     .from(purchasesTable)
     .where(
@@ -5214,8 +5224,10 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
           .where(and(eq(purchasesTable.discordUserId, userId), eq(purchasesTable.status, "completed")))
           .then((rows) => rows.find((p) => p.discordRoomId));
 
-    if (!skipStoreCheck && !userStore) {
-      await interaction.editReply({ content: `هو انت عندك متجر اساسا ؟ <a:ZA_TOM:1500527266055323848>` });
+    if (!userStore) {
+      if (!skipStoreCheck) {
+        await interaction.editReply({ content: `هو انت عندك متجر اساسا ؟ <a:ZA_TOM:1500527266055323848>` });
+      }
       return;
     }
 
@@ -7322,13 +7334,18 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
       }
     }
 
+    if (!thread) {
+      await interaction.editReply({ content: "❌ فشل إنشاء ثريد المراجعة — جرب تاني." });
+      return;
+    }
+
     // ضيف الأطراف: العميل، صاحب المتجر، الشريك (لو موجود)، وأعضاء رتبة المراجعة
     const reviewerIds = await getRoleMemberIds(guild, PRODUCT_REQUEST_REVIEWER_ROLE_ID);
     const memberIds = new Set<string>([interaction.user.id, storeOwnerId, ...reviewerIds]);
     if (partnerId) memberIds.add(partnerId);
 
     for (const id of memberIds) {
-      await thread!.members.add(id).catch(() => {});
+      await thread.members.add(id).catch(() => {});
     }
 
     const closeRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -9256,7 +9273,7 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
         // إخفاء شانلات الشوب العامة (المزادات + الطلبيات)
         for (const chId of SHOP_PUBLIC_CHANNEL_IDS) {
           const ch = interaction.guild?.channels.cache.get(chId);
-          if (ch) {
+          if (ch && "permissionOverwrites" in ch) {
             await ch.permissionOverwrites.edit(interaction.user.id, { ViewChannel: false })
               .catch(() => {});
           }
@@ -9270,7 +9287,9 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
         for (const { roomId } of activeRooms) {
           if (!roomId) continue;
           const ch = interaction.guild?.channels.cache.get(roomId);
-          if (ch) await ch.permissionOverwrites.edit(interaction.user.id, { ViewChannel: false }).catch(() => {});
+          if (ch && "permissionOverwrites" in ch) {
+            await ch.permissionOverwrites.edit(interaction.user.id, { ViewChannel: false }).catch(() => {});
+          }
         }
 
         await interaction.editReply({ content: "✅ تم تفعيل **عدم الإزعاج** — اختفت منك كل رومات الشوب ورتب المنشنات." });
