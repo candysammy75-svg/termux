@@ -65,6 +65,7 @@ import {
   userPointsTable,
   productRequestsTable,
   encryptWordsTable,
+  withDbRetry,
 } from "./db.js";
 import { eq, and, ne, lt, isNull, sql, inArray } from "drizzle-orm";
 import { logger } from "./logger.js";
@@ -2389,11 +2390,13 @@ function startAuctionScheduler(guild: Guild): void {
       const { date, hour, minute } = getCairoTime();
       const nowMin = hour * 60 + minute;
 
-      const todaySchedules = await db.select().from(auctionSchedulesTable).where(
-        and(
-          eq(auctionSchedulesTable.scheduledDate, date),
-          inArray(auctionSchedulesTable.status, ["scheduled", "active"]),
-        ),
+      const todaySchedules = await withDbRetry(() =>
+        db.select().from(auctionSchedulesTable).where(
+          and(
+            eq(auctionSchedulesTable.scheduledDate, date),
+            inArray(auctionSchedulesTable.status, ["scheduled", "active"]),
+          ),
+        )
       );
 
       for (const sched of todaySchedules) {
