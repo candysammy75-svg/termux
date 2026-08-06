@@ -2708,7 +2708,7 @@ async function sendShopPanel(channel: TextChannel) {
     .setAuthor({ name: "Dragon $hop", iconURL: guildIconURL })
     .setDescription(description)
     .setColor(0x00bfff)
-    .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p" });
+    .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p", iconURL: guildIconURL });
 
   // أضف بانر لو موجود (dragon_banner.webp)
   if (fs.existsSync(DRAGON_BANNER_PATH)) {
@@ -2753,7 +2753,7 @@ async function sendBuyPanel(channel: TextChannel) {
     .setAuthor({ name: "Dragon $hop", iconURL: guildIconURL })
     .setDescription(description)
     .setColor(0x2ecc71)
-    .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p" });
+    .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p", iconURL: guildIconURL });
 
   if (fs.existsSync(DRAGON_BANNER_PATH)) {
     files.push(new AttachmentBuilder(DRAGON_BANNER_PATH, { name: "dragon_banner.webp" }));
@@ -4821,7 +4821,7 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
         .setTitle("أسعار الإضافات")
         .setDescription("أختر زر بالأسفل لمعرفة سعر الإضافة")
         .setColor(0x00bfff)
-        .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p" });
+        .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p", iconURL: guildIconURL });
 
       if (guildIconURL) embed.setThumbnail(guildIconURL);
 
@@ -4909,7 +4909,7 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
             inline: false,
           },
         )
-        .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p" });
+        .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p", iconURL: guildIconURL });
 
       if (guildIconURL) auctionEmbed.setThumbnail(guildIconURL);
 
@@ -4941,7 +4941,7 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
               `⏱️ المزاد ينتهي بعد **دقيقتين** من آخر عرض`,
             )
             .setColor(0x5865f2)
-            .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p" });
+            .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p", iconURL: guildIconURL });
 
           if (guildIconURL) howEmbed.setThumbnail(guildIconURL);
 
@@ -4967,7 +4967,7 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
           `> وتقدر تشتري **منشن** من الإضافات 💰`
         )
         .setColor(0x00bfff)
-        .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p" });
+        .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p", iconURL: guildIconURL });
 
       if (guildIconURL) ordersEmbed.setThumbnail(guildIconURL);
 
@@ -4995,7 +4995,7 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
       .setTitle("تفاصيل الانواع")
       .setDescription("لمعرفة تفاصيل النوع اضغط على النوع الذي تريده")
       .setColor(0x00bfff)
-      .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p" });
+      .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p", iconURL: guildIconURL });
 
     if (guildIconURL) embed.setThumbnail(guildIconURL);
 
@@ -5032,7 +5032,8 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
   // ── زرار فئة الشراء (buycat_*) ───────────────────────────────────────────
   if (interaction.isButton() && interaction.customId.startsWith("buycat_")) {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-    const category = interaction.customId.replace("buycat_", "");
+    const category      = interaction.customId.replace("buycat_", "");
+    const guildIconURL  = interaction.guild?.iconURL({ extension: "png", size: 256 }) ?? undefined;
 
     // ── فئة الإضافات ────────────────────────────────────────────────────────
     if (category === "الإضافات") {
@@ -5040,7 +5041,7 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
         .setTitle("➕ شراء إضافات")
         .setDescription("اضغط على الإضافة اللي عايز تشتريها")
         .setColor(0x2ecc71)
-        .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p" });
+        .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p", iconURL: guildIconURL });
 
       // NOTE: نفس شكل أزرار "أسعار الإضافات" بالظبط (Secondary + إيموجي موحّد) —
       //       بس هنا بتودّي على طول لخطوة الدفع من غير عرض سعر.
@@ -5085,7 +5086,7 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
         .setTitle("🏷️ شراء منشن إعلان مزاد")
         .setDescription("اختار نوع المنشن اللي عايز تشتريه")
         .setColor(0x2ecc71)
-        .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p" });
+        .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p", iconURL: guildIconURL });
 
       // NOTE: نفس customId بتاع buy_auc_mention_* الأصلي — بيودّيك على طول لأمر التحويل.
       const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -5110,7 +5111,7 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
           `> وتقدر تشتري **منشن** من الإضافات 💰`
         )
         .setColor(0x2ecc71)
-        .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p" });
+        .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p", iconURL: guildIconURL });
 
       if (guildIconURL) ordersEmbed.setThumbnail(guildIconURL);
 
@@ -5136,7 +5137,7 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
       .setTitle(`شراء — ${category}`)
       .setDescription("اضغط على النوع اللي عايز تشتريه — هتتفتح لك تذكرة فوراً")
       .setColor(0x2ecc71)
-      .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p" });
+      .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p", iconURL: guildIconURL });
 
     const buycatFiles: AttachmentBuilder[] = [];
     const buycatBannerPath = BUYCAT_BANNER_PATH[category];
@@ -5215,8 +5216,9 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
       return;
     }
 
+    const guildIconURL = interaction.guild?.iconURL({ extension: "png", size: 256 }) ?? undefined;
     const confirmEmbed = (title: string) =>
-      new EmbedBuilder().setTitle(title).setColor(0x2ecc71).setFooter({ text: "Dev By : mostafa9321 & ahmed_.p" });
+      new EmbedBuilder().setTitle(title).setColor(0x2ecc71).setFooter({ text: "Dev By : mostafa9321 & ahmed_.p", iconURL: guildIconURL });
 
     if (interaction.customId === "quickbuy_change_store_name") {
       const btn = new ButtonBuilder().setCustomId(`buy_change_store_name_${userStore.id}`).setLabel("✏️ تأكيد الشراء").setStyle(ButtonStyle.Primary);
@@ -5732,7 +5734,7 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
       .setTitle(addon.label)
       .setColor(0x00bfff)
       .addFields({ name: "💰 السعر", value: priceText, inline: false })
-      .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p" });
+      .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p", iconURL: guildIconURL });
 
     await interaction.editReply({ embeds: [embed] });
     return;
@@ -6835,7 +6837,7 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
       .setAuthor({ name: "Dragon $hop", iconURL: guildIconURL })
       .setTitle(`📅 المواعيد المحجوزة — ${date}`)
       .setColor(0x5865f2)
-      .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p" });
+      .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p", iconURL: guildIconURL });
 
     if (guildIconURL) embed.setThumbnail(guildIconURL);
 
@@ -6931,7 +6933,7 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
           inline: false,
         },
       )
-      .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p" });
+      .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p", iconURL: guildIconURL });
 
     // أضف صورة التنين لو موجودة
     const files: AttachmentBuilder[] = [];
