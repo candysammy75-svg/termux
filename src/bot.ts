@@ -350,7 +350,40 @@ async function cancelPendingMentionPurchase(userId: string, deleteTicket: boolea
   if (!deleteTicket || !pending.ticketChannelId) return;
   try {
     const ch = await client.channels.fetch(pending.ticketChannelId).catch(() => null);
-    if (ch && "delete" in ch) await (ch as import("discord.js").TextChannel).delete("Mention ticket timed out").catch(() => {});
+    if (!ch || !("send" in ch)) return;
+    const textCh       = ch as import("discord.js").TextChannel;
+    const guild        = textCh.guild;
+    const guildIconURL = guild?.iconURL({ extension: "png", size: 256 }) ?? undefined;
+    const DIV_X        = "ـﮩ════════════════ﮩـ";
+    const timeoutFiles: import("discord.js").AttachmentBuilder[] = [];
+
+    const timeoutEmbed = new EmbedBuilder()
+      .setAuthor({ name: "Dragon $hop", iconURL: guildIconURL })
+      .setTitle(`⏰ انتهت مهلة شراء المنشن`)
+      .setDescription(`<@${userId}> ${MONEY_EMOJI}\n> ${DIV_X}`)
+      .setColor(0xff4444)
+      .addFields(
+        {
+          name:   `${STAR_EMOJI} العملية`,
+          value:  `> ${MONEY_EMOJI} **${pending.label} × ${pending.qty}** منشن\n> ${DIV_X}`,
+          inline: false,
+        },
+        {
+          name:   `${STAR_EMOJI} السبب`,
+          value:  `> مفيش تحويل اتعمل خلال 5 دقايق\n> لو عايز تشتري تاني، ابدأ عملية الشراء من الأول 🔄\n> ${DIV_X}`,
+          inline: false,
+        },
+      )
+      .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p", iconURL: guildIconURL });
+
+    if (fs.existsSync(DRAGON_BANNER_PATH)) {
+      timeoutFiles.push(new AttachmentBuilder(DRAGON_BANNER_PATH, { name: "dragon_banner.webp" }));
+      timeoutEmbed.setImage("attachment://dragon_banner.webp");
+    }
+
+    await textCh.send({ content: `<@${userId}>`, embeds: [timeoutEmbed], files: timeoutFiles });
+    await new Promise((r) => setTimeout(r, 5000));
+    await textCh.delete("Mention ticket timed out").catch(() => {});
   } catch {
     // الشانل اتحذف بالفعل — تجاهل
   }
@@ -3302,17 +3335,35 @@ client.on(Events.MessageCreate, async (message: Message) => {
             try {
               const ticketCh = await client.channels.fetch(ticketChId).catch(() => null) as TextChannel | null;
               if (ticketCh) {
+                const confirmGuildIcon = ticketCh.guild?.iconURL({ extension: "png", size: 256 }) ?? undefined;
+                const DIV_C            = "ـﮩ════════════════ﮩـ";
+                const confirmFiles: import("discord.js").AttachmentBuilder[] = [];
+
                 const confirmEmbed = new EmbedBuilder()
+                  .setAuthor({ name: "Dragon $hop", iconURL: confirmGuildIcon })
                   .setTitle(`${STAR_EMOJI} تم تأكيد شراء المنشن! ✅`)
+                  .setDescription(`<@${matchedMention.userId}> ${MONEY_EMOJI}\n> ${DIV_C}`)
                   .setColor(0x00ff88)
-                  .setDescription(
-                    `<@${matchedMention.userId}>\n` +
-                    `**النوع:** ${matchedMention.label} × **${matchedMention.qty}**\n` +
-                    `**رصيدك الجديد:** ${newBalance} منشن\n\n` +
-                    `التذكرة هتقفل خلال ثوان ⏳`
+                  .addFields(
+                    {
+                      name:   `${STAR_EMOJI} العملية`,
+                      value:  `> ${MONEY_EMOJI} **${matchedMention.label} × ${matchedMention.qty}** منشن\n> ${DIV_C}`,
+                      inline: false,
+                    },
+                    {
+                      name:   `${STAR_EMOJI} رصيدك الجديد`,
+                      value:  `> ${MONEY_EMOJI} **${newBalance}** منشن\n> ${DIV_C}`,
+                      inline: false,
+                    },
                   )
-                  .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p" });
-                await ticketCh.send({ content: `<@${matchedMention.userId}>`, embeds: [confirmEmbed] });
+                  .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p", iconURL: confirmGuildIcon });
+
+                if (fs.existsSync(DRAGON_BANNER_PATH)) {
+                  confirmFiles.push(new AttachmentBuilder(DRAGON_BANNER_PATH, { name: "dragon_banner.webp" }));
+                  confirmEmbed.setImage("attachment://dragon_banner.webp");
+                }
+
+                await ticketCh.send({ content: `<@${matchedMention.userId}>`, embeds: [confirmEmbed], files: confirmFiles });
                 setTimeout(() => ticketCh.delete("Mention purchase confirmed").catch(() => {}), 5000);
               }
             } catch { /* تجاهل لو التكت اتحذف */ }
@@ -5806,17 +5857,48 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
     logger.info({ userId, mentionKey, qty, transferAmt }, "Pending mention purchase created — ticket opened");
 
     // ── ابعت الأمر جوّه التكت ────────────────────────────────────────────────
+    const guildIconURL = guild.iconURL({ extension: "png", size: 256 }) ?? undefined;
+    const DIV_T        = "ـﮩ════════════════ﮩـ";
+    const ticketFiles: AttachmentBuilder[] = [];
+
     const ticketEmbed = new EmbedBuilder()
-      .setTitle(`${STAR_EMOJI} طلب منشن — ${cfg.label}`)
+      .setAuthor({ name: "Dragon $hop", iconURL: guildIconURL })
+      .setTitle(`${STAR_EMOJI} أمر تحويل المنشن`)
+      .setDescription(`> ${MONEY_EMOJI} <@${userId}> اتبع الخطوات التالية\n> ${DIV_T}`)
       .setColor(0xffd700)
-      .setDescription(
-        `<@${userId}>\n` +
-        `**النوع:** ${cfg.label} × **${qty}**\n` +
-        `**المبلغ (شامل 5%):** ${transferAmt.toLocaleString()} كريدت\n\n` +
-        `\`\`\`${cmd}\`\`\`\n` +
-        `⏰ عندك **5 دقايق** تحول فيهم`
+      .addFields(
+        {
+          name:   `${STAR_EMOJI} النوع والكمية`,
+          value:  `> ${MONEY_EMOJI} **${cfg.label}** — **${qty}** منشن\n> ${DIV_T}`,
+          inline: false,
+        },
+        {
+          name:   `${STAR_EMOJI} السعر الصافي`,
+          value:  `> ${MONEY_EMOJI} **${netPrice.toLocaleString()}** كريدت\n> ${DIV_T}`,
+          inline: false,
+        },
+        {
+          name:   `${STAR_EMOJI} مبلغ التحويل (شامل عمولة 5%)`,
+          value:  `> ${MONEY_EMOJI} **${transferAmt.toLocaleString()}** كريدت\n> ${DIV_T}`,
+          inline: false,
+        },
+        {
+          name:   `${STAR_EMOJI} أمر التحويل — انسخه وابعثه في ProBot`,
+          value:  `> \`\`\`${cmd}\`\`\`\n> ${DIV_T}`,
+          inline: false,
+        },
+        {
+          name:   `${STAR_EMOJI} المهلة`,
+          value:  `> ${MONEY_EMOJI} عندك **5 دقايق** تحول فيهم\n> بعدهم العملية بتتكنسل تلقائياً ⏰\n> ${DIV_T}`,
+          inline: false,
+        },
       )
-      .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p" });
+      .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p", iconURL: guildIconURL });
+
+    if (fs.existsSync(DRAGON_TEXT_BANNER_PATH)) {
+      ticketFiles.push(new AttachmentBuilder(DRAGON_TEXT_BANNER_PATH, { name: "dragon_text_banner.webp" }));
+      ticketEmbed.setImage("attachment://dragon_text_banner.webp");
+    }
 
     const closeBtn = new ButtonBuilder()
       .setCustomId(`close_mention_ticket_${userId}`)
@@ -5826,6 +5908,7 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
     await ticketChannel.send({
       content:    `<@${userId}>`,
       embeds:     [ticketEmbed],
+      files:      ticketFiles,
       components: [new ActionRowBuilder<ButtonBuilder>().addComponents(closeBtn)],
     });
 
