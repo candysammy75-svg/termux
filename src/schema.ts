@@ -74,6 +74,7 @@ export const purchasesTable = pgTable("purchases", {
   roomWarningCount:     integer("room_warning_count").notNull().default(0),
   isRoomDeactivated:    boolean("is_room_deactivated").notNull().default(false),
   partnerDiscordUserId: text("partner_discord_user_id"),                        // Discord ID شريك الروم (واحد بس)
+  productRequestsEnabled: boolean("product_requests_enabled").notNull().default(false),
   appliedPromoCode:     text("applied_promo_code"),        // كود الخصم المطبّق على التذكرة دي (لو فيه)
   discountAmount:       integer("discount_amount").notNull().default(0), // قيمة الخصم الصافية المطبّقة
   createdAt:        timestamp("created_at").defaultNow(),
@@ -138,6 +139,25 @@ export const addonPricesTable = pgTable("addon_prices", {
 });
 
 export type AddonPrice = typeof addonPricesTable.$inferSelect;
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  addon_purchases — عمليات شراء الإضافات التي تحتاج تحقق ProBot
+//  NOTE: منفصلة عن purchases الخاصة بشراء الرومات حتى لا تدخل عملية الإضافة
+//        في دورة إنشاء روم جديدة أو انتظار اسم روم.
+// ══════════════════════════════════════════════════════════════════════════════
+export const addonPurchasesTable = pgTable("addon_purchases", {
+  id:              serial("id").primaryKey(),
+  addonKey:        text("addon_key").notNull(),
+  discordUserId:   text("discord_user_id").notNull(),
+  discordUsername: text("discord_username").notNull(),
+  roomChannelId:   text("room_channel_id").notNull(),
+  ticketChannelId: text("ticket_channel_id").notNull(),
+  totalPrice:      text("total_price").notNull(),
+  status:          text("status").notNull().default("pending"), // pending | completed | cancelled
+  createdAt:       timestamp("created_at").defaultNow(),
+  completedAt:     timestamp("completed_at"),
+});
+export type AddonPurchase = typeof addonPurchasesTable.$inferSelect;
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  warnings — سجل التحذيرات
@@ -293,6 +313,22 @@ export const productRequestsTable = pgTable("product_requests", {
   unique("product_requests_room_ticket_unique").on(table.roomChannelId, table.ticketNumber),
 ]);
 export type ProductRequest = typeof productRequestsTable.$inferSelect;
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  product_request_blocks — أعضاء ممنوعون من طلب المنتجات من متجر محدد
+//  NOTE: المنع خاص بكل متجر، وليس منعاً عاماً من البوت. الأدمنستراتور يتجاوز
+//        المنع دائماً، حتى لو كان مسجلاً في هذا الجدول.
+// ══════════════════════════════════════════════════════════════════════════════
+export const productRequestBlocksTable = pgTable("product_request_blocks", {
+  id:              serial("id").primaryKey(),
+  roomChannelId:   text("room_channel_id").notNull(),
+  blockedUserId:   text("blocked_user_id").notNull(),
+  blockedUsername: text("blocked_username").notNull(),
+  createdAt:       timestamp("created_at").defaultNow(),
+}, (table) => [
+  unique("product_request_blocks_room_user_unique").on(table.roomChannelId, table.blockedUserId),
+]);
+export type ProductRequestBlock = typeof productRequestBlocksTable.$inferSelect;
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  encrypt_words — قاموس كلمات التشفير الديناميكي

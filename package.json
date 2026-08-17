@@ -1,10 +1,11 @@
 {
-  "name": "dragon-shop-bot",
+  "name": "@workspace/dragon-shop-bot",
   "version": "1.0.0",
   "description": "Dragon Shop Discord Bot — Termux Edition",
   "type": "module",
   "scripts": {
     "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
     "db:push": "drizzle-kit push --config drizzle.config.ts",
     "db:push-force": "drizzle-kit push --force --config drizzle.config.ts"
   },

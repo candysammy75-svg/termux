@@ -70,6 +70,8 @@ import {
   promoRedemptionsTable,
   userPointsTable,
   productRequestsTable,
+  productRequestBlocksTable,
+  addonPurchasesTable,
   encryptWordsTable,
   withDbRetry,
 } from "./db.js";
@@ -249,6 +251,7 @@ const ADDONS = [
   { key: "remove_store_warning",      label: "سعر إزالة تحذير" },         // يسار
   { key: "auto_lines",                label: "سعر خطوط تلقائيه" },
   { key: "auto_publish",              label: "سعر نشر تلقائي" },          // يمين
+  { key: "product_requests",            label: "سعر طلب المنتج" },
 ] as const;
 
 /** نوع TypeScript المشتق تلقائياً من مفاتيح الإضافات — بيستخدم في /setaddonprice */
@@ -1217,6 +1220,8 @@ async function getOrCreateStoreWebhook(channel: TextChannel): Promise<import("di
 
 /** رتبة "مراجعين طلبات المنتج" — بتتضاف تلقائياً لثريد أي طلب منتج جديد */
 const PRODUCT_REQUEST_REVIEWER_ROLE_ID = "1500495148700668136";
+const PRODUCT_REQUESTS_ADDON_PRICE = 10_000_000;
+const PRODUCT_REQUESTS_ADDON_KEY = "product_requests";
 
 /** بيجيب كل الأعضاء اللي عندهم رتبة معينة في السيرفر */
 async function getRoleMemberIds(guild: Guild, roleId: string): Promise<string[]> {
@@ -1237,6 +1242,98 @@ async function getRoleMemberIds(guild: Guild, roleId: string): Promise<string[]>
     logger.error({ err, roleId }, "Failed to fetch role members");
     return [];
   }
+}
+
+/**
+ * يفتح تذكرة دفع لإضافة "طلب المنتج".
+ * العملية منفصلة عن شراء الرومات لأن الدفع هنا يفعّل ميزة على متجر موجود
+ * ولا ينشئ رومًا جديدًا.
+ */
+async function createProductRequestsAddonTicket(
+  interaction: import("discord.js").ButtonInteraction,
+  guild: Guild,
+  userId: string,
+  username: string,
+  roomChannelId: string,
+) {
+  const [priceRow] = await db
+    .select()
+    .from(addonPricesTable)
+    .where(eq(addonPricesTable.key, PRODUCT_REQUESTS_ADDON_KEY));
+  const configuredPrice = priceRow ? Number(priceRow.price) : PRODUCT_REQUESTS_ADDON_PRICE;
+  const netPrice = Number.isFinite(configuredPrice) && configuredPrice > 0
+    ? Math.round(configuredPrice)
+    : PRODUCT_REQUESTS_ADDON_PRICE;
+  const transferAmount = calcTransferAmount(netPrice);
+
+  const ticketChannel = await guild.channels.create({
+    name: `product-requests-${username}`.slice(0, 100),
+    type: ChannelType.GuildText,
+    parent: TICKETS_CATEGORY_ID,
+    permissionOverwrites: [
+      { id: guild.id, deny: [PermissionFlagsBits.ViewChannel] },
+      { id: userId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] },
+      { id: guild.roles.everyone, deny: [PermissionFlagsBits.ViewChannel] },
+    ],
+  });
+
+  let addonPurchase: typeof addonPurchasesTable.$inferSelect | undefined;
+  try {
+    [addonPurchase] = await db.insert(addonPurchasesTable).values({
+      addonKey: PRODUCT_REQUESTS_ADDON_KEY,
+      discordUserId: userId,
+      discordUsername: username,
+      roomChannelId,
+      ticketChannelId: ticketChannel.id,
+      totalPrice: String(transferAmount),
+      status: "pending",
+    }).returning();
+  } catch (err) {
+    await ticketChannel.delete("Failed to create addon purchase record").catch(() => {});
+    throw err;
+  }
+  if (!addonPurchase) {
+    await ticketChannel.delete("Addon purchase record was not created").catch(() => {});
+    throw new Error("Failed to create addon purchase record");
+  }
+
+  const guildIconURL = guild.iconURL({ extension: "png", size: 256 }) ?? undefined;
+  const divider = "ـﮩ════════════════ﮩـ";
+  const embed = new EmbedBuilder()
+    .setAuthor({ name: "Dragon $hop", iconURL: guildIconURL })
+    .setTitle("🛒 إضافة طلب المنتج")
+    .setDescription(
+      `<@${userId}>\n\n` +
+      `الإضافة دي بتظهر زر **طلب المنتج** تحت رسائل متجرك، وتفتح تذكرة خاصة بينك وبين العميل.\n` +
+      `> ${divider}`,
+    )
+    .setColor(0x00c8ff)
+    .addFields(
+      { name: "💰 السعر الصافي", value: `**${netPrice.toLocaleString()}** كريدت`, inline: true },
+      { name: "💸 التحويل", value: `\`${transferAmount.toLocaleString()}\``, inline: true },
+      { name: "📋 أمر التحويل", value: `\`C <@${OWNER_ID}> ${transferAmount}\``, inline: false },
+      {
+        name: "طريقة التفعيل",
+        value: "حوّل المبلغ في ProBot. بعد التأكيد هيتفعل الزر تلقائيًا على متجرك.",
+        inline: false,
+      },
+    )
+    .setFooter({ text: "Dragon Shop", iconURL: guildIconURL });
+
+  const closeButton = new ButtonBuilder()
+    .setCustomId(`close_addon_purchase_${addonPurchase.id}`)
+    .setLabel("🔒 قفل التذكرة")
+    .setStyle(ButtonStyle.Danger);
+
+  await ticketChannel.send({
+    content: `<@${userId}> <@${OWNER_ID}>`,
+    embeds: [embed],
+    components: [new ActionRowBuilder<ButtonBuilder>().addComponents(closeButton)],
+  });
+
+  await interaction.editReply({
+    content: `✅ اتفتحت تذكرة الدفع في <#${ticketChannel.id}>. حوّل المبلغ وانتظر التأكيد التلقائي.`,
+  });
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -3274,6 +3371,74 @@ client.on(Events.MessageCreate, async (message: Message) => {
         )
         .then((rows) => rows[0]);
 
+      // ── شراء إضافة مدفوعة (ومنها إضافة طلب المنتج) ─────────────────────
+      // ProBot بيبلغ عن الصافي بعد العمولة، لذلك نقارن بنفس طريقة شراء الروم.
+      const addonPurchase = await db
+        .select()
+        .from(addonPurchasesTable)
+        .where(
+          and(
+            eq(addonPurchasesTable.ticketChannelId, channel.id),
+            eq(addonPurchasesTable.status, "pending"),
+          ),
+        )
+        .then((rows) => rows[0]);
+
+      if (!ticketPurchase && addonPurchase) {
+        const requiredGross = Number(addonPurchase.totalPrice);
+        const requiredNet = Math.floor(requiredGross * (1 - PROBOT_FEE));
+        if (paid < requiredNet) {
+          await channel.send(
+            `⚠️ المبلغ المحوّل (${paid.toLocaleString()}) أقل من المطلوب (${requiredNet.toLocaleString()}). يرجى إعادة التحويل.`,
+          );
+          return;
+        }
+
+        await db
+          .update(addonPurchasesTable)
+          .set({ status: "completed", completedAt: new Date() })
+          .where(
+            and(
+              eq(addonPurchasesTable.id, addonPurchase.id),
+              eq(addonPurchasesTable.status, "pending"),
+            ),
+          );
+
+        if (addonPurchase.addonKey === PRODUCT_REQUESTS_ADDON_KEY) {
+          await db
+            .update(purchasesTable)
+            .set({ productRequestsEnabled: true })
+            .where(
+              and(
+                eq(purchasesTable.discordRoomId, addonPurchase.roomChannelId),
+                eq(purchasesTable.discordUserId, addonPurchase.discordUserId),
+                eq(purchasesTable.status, "completed"),
+              ),
+            );
+        }
+
+        const doneEmbed = new EmbedBuilder()
+          .setTitle("✅ تم تفعيل إضافة طلب المنتج")
+          .setDescription(
+            `<@${addonPurchase.discordUserId}> الإضافة اتفعلت على متجرك بنجاح.\n\n` +
+            "من دلوقتي أي رسالة جديدة منك أو من شريكك هيظهر تحتها زر **طلب المنتج**.",
+          )
+          .setColor(0x00c853);
+        const closeAddonButton = new ButtonBuilder()
+          .setCustomId(`close_addon_purchase_${addonPurchase.id}`)
+          .setLabel("🔒 قفل التذكرة")
+          .setStyle(ButtonStyle.Danger);
+        await channel.send({
+          embeds: [doneEmbed],
+          components: [new ActionRowBuilder<ButtonBuilder>().addComponents(closeAddonButton)],
+        });
+        logger.info(
+          { addonPurchaseId: addonPurchase.id, userId: addonPurchase.discordUserId, addonKey: addonPurchase.addonKey },
+          "Addon purchase completed via ProBot transfer",
+        );
+        return;
+      }
+
       // لو مفيش تذكرة شراء عادية، ابحث في تذاكر المزادات
       if (!ticketPurchase) {
         // تذكرة مزاد مباشر (auctype_) — انتظار الدفع
@@ -4211,6 +4376,7 @@ client.on(Events.MessageCreate, async (message: Message) => {
       partnerDiscordUserId: purchasesTable.partnerDiscordUserId,
       roomWarningCount:     purchasesTable.roomWarningCount,
       isRoomDeactivated:    purchasesTable.isRoomDeactivated,
+      productRequestsEnabled: purchasesTable.productRequestsEnabled,
     })
     .from(purchasesTable)
     .where(
@@ -4248,6 +4414,78 @@ client.on(Events.MessageCreate, async (message: Message) => {
   }
 
   if (isRoomChannel) {
+    const isRoomOwner   = userId === roomPurchase!.ownerId;
+    const isRoomPartner = roomPurchase!.partnerDiscordUserId != null && userId === roomPurchase!.partnerDiscordUserId;
+
+    // ── التحكم في أعضاء طلب المنتج ───────────────────────────────────────
+    // !bl @member  → يمنع العضو من رؤية المتجر وطلب منتج منه
+    // !wl @member  → يرجع له رؤية المتجر
+    if (/^!(?:bl|wl)\b/i.test(content.trim())) {
+      if (!roomPurchase!.productRequestsEnabled) {
+        await message.reply("❌ لازم تشتري وتفعّل إضافة طلب المنتج الأول من قائمة الإضافات.").catch(() => {});
+        return;
+      }
+
+      const accessMatch = content.trim().match(/^!(bl|wl)(?:\s+<@!?(\d+)>)?\s*$/i);
+      if (!accessMatch?.[2]) {
+        await message.reply("❌ استخدم الأمر بالشكل ده: `!bl @العضو` أو `!wl @العضو`").catch(() => {});
+        return;
+      }
+
+      const canManageAccess =
+        isRoomOwner ||
+        isRoomPartner ||
+        (message.member?.permissions.has(PermissionFlagsBits.Administrator) ?? false);
+      if (!canManageAccess) {
+        await message.reply("❌ الأمر ده متاح لصاحب المتجر أو شريكه فقط.").catch(() => {});
+        return;
+      }
+
+      const targetId = accessMatch[2];
+      const targetMember =
+        message.guild.members.cache.get(targetId) ??
+        (await message.guild.members.fetch(targetId).catch(() => null));
+      if (!targetMember) {
+        await message.reply("❌ العضو ده مش موجود في السيرفر.").catch(() => {});
+        return;
+      }
+
+      if (targetMember.permissions.has(PermissionFlagsBits.Administrator)) {
+        await message.reply("✅ العضو ده Administrator ومش بيتمنع من المتجر.").catch(() => {});
+        return;
+      }
+      if (targetId === roomPurchase!.ownerId || targetId === roomPurchase!.partnerDiscordUserId) {
+        await message.reply("❌ مينفعش تمنع صاحب المتجر أو شريكه من متجرك.").catch(() => {});
+        return;
+      }
+
+      const command = accessMatch[1]!.toLowerCase();
+      if (command === "bl") {
+        await db.insert(productRequestBlocksTable).values({
+          roomChannelId: channel.id,
+          blockedUserId: targetId,
+          blockedUsername: targetMember.user.username,
+        }).onConflictDoNothing();
+        await channel.permissionOverwrites.edit(
+          targetId,
+          { ViewChannel: false },
+          { reason: `Product store blocked by ${message.author.username}` },
+        );
+        await message.reply(`✅ اتمنع <@${targetId}> من رؤية المتجر وطلب المنتجات منه.`).catch(() => {});
+      } else {
+        await db.delete(productRequestBlocksTable).where(and(
+          eq(productRequestBlocksTable.roomChannelId, channel.id),
+          eq(productRequestBlocksTable.blockedUserId, targetId),
+        ));
+        await channel.permissionOverwrites.edit(
+          targetId,
+          { ViewChannel: null },
+          { reason: `Product store unblocked by ${message.author.username}` },
+        );
+        await message.reply(`✅ اتشال المنع عن <@${targetId}> ورجع يقدر يشوف المتجر.`).catch(() => {});
+      }
+      return;
+    }
 
     // ── تلقائي للخطوط: استقبال الصورة لو في انتظار ────────────────────────
     const pendingImg = pendingAutoLineImages.get(userId);
@@ -4481,8 +4719,6 @@ client.on(Events.MessageCreate, async (message: Message) => {
     // NOTE: الفحص بيتم في آخر الـ isRoomChannel block بعد كل مودريشن
     //       يعني الرسائل اللي اتحذفت مش هيتبعت بعدها صورة
     const ownerAutoLines = activeAutoLines.get(roomPurchase!.ownerId);
-    const isRoomOwner   = userId === roomPurchase!.ownerId;
-    const isRoomPartner = roomPurchase!.partnerDiscordUserId != null && userId === roomPurchase!.partnerDiscordUserId;
     if (ownerAutoLines) {
       if (isRoomOwner || isRoomPartner) {
         await channel.send({
@@ -4539,7 +4775,8 @@ client.on(Events.MessageCreate, async (message: Message) => {
     }
 
     // ── زرار "طلب المنتج" بعد كل رسالة من الأونر أو الشريك ─────────────────
-    if (isRoomOwner || isRoomPartner) {
+    // لا يظهر إلا بعد شراء إضافة طلب المنتج وتفعيلها.
+    if ((isRoomOwner || isRoomPartner) && roomPurchase!.productRequestsEnabled) {
       const requestProductRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
           .setCustomId(`request_product_${channel.id}`)
@@ -5080,6 +5317,7 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
         new ButtonBuilder().setCustomId("quickbuy_addon_remove_store_warning").setLabel("إزالة تحذير").setEmoji(BUY_EMOJI).setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId("quickbuy_addon_auto_lines").setLabel("خطوط تلقائيه").setEmoji(BUY_EMOJI).setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId("quickbuy_addon_auto_publish").setLabel("نشر تلقائي").setEmoji(BUY_EMOJI).setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId("quickbuy_addon_product_requests").setLabel("طلب المنتج").setEmoji(BUY_EMOJI).setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId("quickbuy_change_store_name").setLabel("تغيير اسم المتجر").setEmoji(BUY_EMOJI).setStyle(ButtonStyle.Secondary),
       ];
 
@@ -5299,6 +5537,36 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
         return;
       }
       await createAutoPublishTicket(interaction, interaction.guild!, userId, interaction.user.username);
+      return;
+    }
+
+    if (addonKey === PRODUCT_REQUESTS_ADDON_KEY) {
+      if (userStore.productRequestsEnabled) {
+        await interaction.editReply({ content: "✅ إضافة طلب المنتج مفعّلة عندك بالفعل." });
+        return;
+      }
+      const [pendingAddon] = await db
+        .select({ id: addonPurchasesTable.id, ticketChannelId: addonPurchasesTable.ticketChannelId })
+        .from(addonPurchasesTable)
+        .where(and(
+          eq(addonPurchasesTable.addonKey, PRODUCT_REQUESTS_ADDON_KEY),
+          eq(addonPurchasesTable.discordUserId, userId),
+          eq(addonPurchasesTable.roomChannelId, userStore.discordRoomId!),
+          eq(addonPurchasesTable.status, "pending"),
+        ));
+      if (pendingAddon) {
+        await interaction.editReply({
+          content: `⏳ عندك تذكرة دفع مفتوحة بالفعل: <#${pendingAddon.ticketChannelId}>`,
+        });
+        return;
+      }
+      await createProductRequestsAddonTicket(
+        interaction,
+        interaction.guild!,
+        userId,
+        interaction.user.username,
+        userStore.discordRoomId!,
+      );
       return;
     }
 
@@ -5738,7 +6006,11 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
 
     // اجيب السعر من DB
     const [row]     = await db.select().from(addonPricesTable).where(eq(addonPricesTable.key, key));
-    const rawPrice   = row ? Number(row.price) : 0;
+    const rawPrice   = row
+      ? Number(row.price)
+      : key === PRODUCT_REQUESTS_ADDON_KEY
+        ? PRODUCT_REQUESTS_ADDON_PRICE
+        : 0;
     const price      = Number.isFinite(rawPrice) ? rawPrice : 0;
     // لو السعر 0 أو مش متحدد → "غير محدد"
     const priceText  = price > 0 ? `${Math.round(price)} كريدت` : "غير محدد";
@@ -7261,12 +7533,35 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
       return;
     }
 
+    if (!roomPurchase.productRequestsEnabled) {
+      await interaction.editReply({ content: "❌ صاحب المتجر لم يفعّل إضافة طلب المنتج بعد." });
+      return;
+    }
+
     const storeOwnerId = roomPurchase.discordUserId;
     const partnerId    = roomPurchase.partnerDiscordUserId;
 
     if (interaction.user.id === storeOwnerId || interaction.user.id === partnerId) {
       await interaction.editReply({ content: "❌ مينفعش تطلب من متجرك بنفسك." });
       return;
+    }
+
+    const requesterMember =
+      guild.members.cache.get(interaction.user.id) ??
+      (await guild.members.fetch(interaction.user.id).catch(() => null));
+    const requesterIsAdmin = requesterMember?.permissions.has(PermissionFlagsBits.Administrator) ?? false;
+    if (!requesterIsAdmin) {
+      const [blocked] = await db
+        .select({ id: productRequestBlocksTable.id })
+        .from(productRequestBlocksTable)
+        .where(and(
+          eq(productRequestBlocksTable.roomChannelId, roomChannelId),
+          eq(productRequestBlocksTable.blockedUserId, interaction.user.id),
+        ));
+      if (blocked) {
+        await interaction.editReply({ content: "❌ صاحب المتجر مانعك من طلب المنتجات من عنده." });
+        return;
+      }
     }
 
     const roomChannel = guild.channels.cache.get(roomChannelId) as TextChannel | undefined;
@@ -7371,6 +7666,32 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
     }).catch(() => {});
 
     await interaction.editReply({ content: `✅ تم فتح تكت الطلب: ${thread}` });
+    return;
+  }
+
+  // ── زرار قفل تذكرة شراء الإضافة ────────────────────────────────────────
+  if (interaction.isButton() && interaction.customId.startsWith("close_addon_purchase_")) {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    const addonPurchaseId = parseInt(interaction.customId.replace("close_addon_purchase_", ""), 10);
+    const [purchase] = await db
+      .select()
+      .from(addonPurchasesTable)
+      .where(eq(addonPurchasesTable.id, addonPurchaseId));
+    if (!purchase) {
+      await interaction.editReply({ content: "❌ التذكرة مش موجودة." });
+      return;
+    }
+    if (purchase.status === "pending") {
+      await db
+        .update(addonPurchasesTable)
+        .set({ status: "cancelled" })
+        .where(eq(addonPurchasesTable.id, addonPurchaseId));
+    }
+    const channel = interaction.channel;
+    await interaction.editReply({ content: "🔒 جاري إغلاق التذكرة..." });
+    if (channel && "delete" in channel) {
+      setTimeout(() => channel.delete("Addon purchase ticket closed").catch(() => {}), 3_000);
+    }
     return;
   }
 
