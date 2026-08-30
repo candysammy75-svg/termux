@@ -49,6 +49,7 @@ import {
   StringSelectMenuOptionBuilder,
   WebhookClient,
   type TextChannel,
+  type ButtonInteraction,
   type Message,
   type Interaction,
   type Guild,
@@ -344,6 +345,7 @@ interface PendingMentionPurchase {
   ticketChannelId: string;
   expiresAt:       number;
   timeoutId:       ReturnType<typeof setTimeout>;
+  pointsApplied?:  number;
 }
 
 const pendingMentionPurchases = new Map<string, PendingMentionPurchase>();
@@ -357,6 +359,7 @@ async function cancelPendingMentionPurchase(userId: string, deleteTicket: boolea
   if (!pending) return;
   clearTimeout(pending.timeoutId);
   pendingMentionPurchases.delete(userId);
+  await refundPurchasePoints(pending.userId, pending.pointsApplied);
   if (!deleteTicket || !pending.ticketChannelId) return;
   try {
     const ch = await client.channels.fetch(pending.ticketChannelId).catch(() => null);
@@ -435,6 +438,7 @@ interface PendingStoreRename {
   channelId:     string;
   expiresAt:     number;
   timeoutId:     ReturnType<typeof setTimeout>;
+  pointsApplied?: number;
 }
 
 const pendingStoreRenames     = new Map<string, PendingStoreRename>();
@@ -454,6 +458,7 @@ interface PendingWarningRemoval {
   guildId:       string;
   expiresAt:     number;
   timeoutId:     ReturnType<typeof setTimeout>;
+  pointsApplied?: number;
 }
 
 interface PendingRoomReactivation {
@@ -466,6 +471,7 @@ interface PendingRoomReactivation {
   guildId:       string;
   expiresAt:     number;
   timeoutId:     ReturnType<typeof setTimeout>;
+  pointsApplied?: number;
 }
 
 const pendingWarningRemovals   = new Map<string, PendingWarningRemoval>();
@@ -485,6 +491,7 @@ interface PendingAddPartner {
   guildId:       string;
   expiresAt:     number;
   timeoutId:     ReturnType<typeof setTimeout>;
+  pointsApplied?: number;
 }
 
 interface PendingRemovePartner {
@@ -498,6 +505,7 @@ interface PendingRemovePartner {
   guildId:       string;
   expiresAt:     number;
   timeoutId:     ReturnType<typeof setTimeout>;
+  pointsApplied?: number;
 }
 
 const pendingAddPartners    = new Map<string, PendingAddPartner>();
@@ -533,6 +541,7 @@ interface PendingAutoPublish {
   guildId:         string;
   expiresAt:       number;
   timeoutId:       ReturnType<typeof setTimeout>;
+  pointsApplied?:  number;
 }
 
 interface ActiveAutoPublish {
@@ -586,6 +595,7 @@ interface PendingAutoLinePurchase {
   guildId:       string;
   expiresAt:     number;
   timeoutId:     ReturnType<typeof setTimeout>;
+  pointsApplied?: number;
 }
 
 interface PendingAutoLineImage {
@@ -630,6 +640,7 @@ interface PendingAucMentionPurchase {
   dbRecordId:      number;   // ID الـ row في DB — للتنظيف عند الإلغاء أو الـ timeout
   expiresAt:       number;
   timeoutId:       ReturnType<typeof setTimeout>;
+  pointsApplied?:  number;
 }
 
 const pendingAucMentionPurchases = new Map<string, PendingAucMentionPurchase>();
@@ -826,6 +837,7 @@ async function cancelPendingStoreRename(userId: string, notify: boolean): Promis
   if (!pending) return;
   clearTimeout(pending.timeoutId);
   pendingStoreRenames.delete(userId);
+  await refundPurchasePoints(userId, pending.pointsApplied);
   if (!notify) return;
   try {
     const ch = await client.channels.fetch(pending.channelId).catch(() => null);
@@ -1002,6 +1014,9 @@ async function sendWarningEmbed(
 
 /** بيجيب رصيد نقاط اليوزر، وبيعمله صف في الجدول لو مش موجود (رصيد 0). */
 async function getUserPoints(discordUserId: string): Promise<number> {
+  await db.insert(userPointsTable)
+    .values({ discordUserId, points: 0 })
+    .onConflictDoNothing({ target: userPointsTable.discordUserId });
   const [row] = await db.select().from(userPointsTable).where(eq(userPointsTable.discordUserId, discordUserId));
   return row?.points ?? 0;
 }
@@ -1024,6 +1039,102 @@ async function addUserPoints(discordUserId: string, delta: number): Promise<numb
     })
     .returning();
   return row?.points ?? 0;
+}
+
+/** خصم نقاط مشروط ذرياً — لا ينجح إلا لو الرصيد الحالي يكفي كامل المبلغ. */
+async function debitUserPoints(
+  discordUserId: string,
+  amount: number,
+): Promise<{ ok: boolean; balance: number }> {
+  const points = Math.max(0, Math.floor(amount));
+  if (points === 0) return { ok: true, balance: await getUserPoints(discordUserId) };
+
+  const [row] = await db
+    .update(userPointsTable)
+    .set({ points: sql`${userPointsTable.points} - ${points}`, updatedAt: new Date() })
+    .where(and(
+      eq(userPointsTable.discordUserId, discordUserId),
+      sql`${userPointsTable.points} >= ${points}`,
+    ))
+    .returning({ points: userPointsTable.points });
+
+  return row
+    ? { ok: true, balance: row.points }
+    : { ok: false, balance: await getUserPoints(discordUserId) };
+}
+
+type PointsPaymentRequest = {
+  userId: string;
+  netPrice: number;
+  label: string;
+  onFull: (interaction: ButtonInteraction) => Promise<void>;
+  onPartial: (interaction: ButtonInteraction, points: number) => Promise<void>;
+  timeoutId: ReturnType<typeof setTimeout>;
+};
+
+const pointsPaymentRequests = new Map<string, PointsPaymentRequest>();
+let pointsPaymentSequence = 0;
+
+function registerPointsPaymentRequest(
+  request: Omit<PointsPaymentRequest, "timeoutId">,
+): string {
+  const token = `${Date.now().toString(36)}_${++pointsPaymentSequence}`;
+  const timeoutId = setTimeout(() => pointsPaymentRequests.delete(token), 30 * 60 * 1000);
+  pointsPaymentRequests.set(token, { ...request, timeoutId });
+  return token;
+}
+
+function pointsPaymentButton(token: string): ButtonBuilder {
+  return new ButtonBuilder()
+    .setCustomId(`points_pay_${token}`)
+    .setLabel("💠 الدفع بالنقاط")
+    .setStyle(ButtonStyle.Success);
+}
+
+function pointsPaymentRow(token: string, creditButton: ButtonBuilder): ActionRowBuilder<ButtonBuilder> {
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(pointsPaymentButton(token), creditButton);
+}
+
+async function refundPurchasePoints(
+  discordUserId: string,
+  pointsApplied: number | null | undefined,
+): Promise<void> {
+  if (pointsApplied && pointsApplied > 0) {
+    await addUserPoints(discordUserId, pointsApplied);
+  }
+}
+
+type LegacyPendingPayment = {
+  userId: string;
+  netPrice: number;
+  transferAmt: number;
+  pointsApplied?: number;
+};
+
+function registerLegacyPointsPayment(
+  pending: LegacyPendingPayment,
+  label: string,
+  onFull: (interaction: ButtonInteraction) => Promise<void>,
+): string {
+  return registerPointsPaymentRequest({
+    userId: pending.userId,
+    netPrice: pending.netPrice,
+    label,
+    onFull,
+    onPartial: async (interaction, points) => {
+      const remainingNet = Math.max(1, Math.round(pending.netPrice) - points);
+      const remainingGross = calcTransferAmount(remainingNet);
+      pending.netPrice = remainingNet;
+      pending.transferAmt = remainingGross;
+      pending.pointsApplied = (pending.pointsApplied ?? 0) + points;
+      await interaction.editReply({
+        content:
+          `✅ استخدمنا **${points.toLocaleString()} نقطة**.\n` +
+          `المتبقي لـ **${label}**: **${remainingNet.toLocaleString()}** صافي — حوّل **${remainingGross.toLocaleString()}**:\n` +
+          `\`C <@${OWNER_ID}> ${remainingGross}\``,
+      });
+    },
+  });
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1325,10 +1436,58 @@ async function createProductRequestsAddonTicket(
     .setLabel("🔒 قفل التذكرة")
     .setStyle(ButtonStyle.Danger);
 
+  const pointsToken = registerPointsPaymentRequest({
+    userId,
+    netPrice,
+    label: "إضافة طلب المنتج",
+    onFull: async (pointsInteraction) => {
+      await db.update(addonPurchasesTable).set({
+        status: "completed",
+        completedAt: new Date(),
+        totalPrice: "0",
+        pointsApplied: netPrice,
+      }).where(and(
+        eq(addonPurchasesTable.id, addonPurchase.id),
+        eq(addonPurchasesTable.status, "pending"),
+      ));
+      await db.update(purchasesTable).set({ productRequestsEnabled: true })
+        .where(and(
+          eq(purchasesTable.discordRoomId, roomChannelId),
+          eq(purchasesTable.discordUserId, userId),
+          eq(purchasesTable.status, "completed"),
+        ));
+      await (pointsInteraction.channel as TextChannel | null)?.send(
+        `✅ <@${userId}> تم الدفع بالكامل بالنقاط وتفعيل إضافة **طلب المنتج**.`,
+      ).catch(() => {});
+      await pointsInteraction.editReply({ content: "✅ تم الخصم وتفعيل الإضافة على متجرك." });
+    },
+    onPartial: async (pointsInteraction, points) => {
+      const remainingNet = Math.max(1, netPrice - points);
+      const remainingGross = calcTransferAmount(remainingNet);
+      const remainingCommand = `C <@${OWNER_ID}> ${remainingGross}`;
+      await db.update(addonPurchasesTable).set({
+        totalPrice: String(remainingGross),
+        pointsApplied: points,
+      }).where(and(
+        eq(addonPurchasesTable.id, addonPurchase.id),
+        eq(addonPurchasesTable.status, "pending"),
+      ));
+      await (pointsInteraction.channel as TextChannel | null)?.send(
+        `✅ استخدمنا **${points.toLocaleString()} نقطة**.\n` +
+        `المتبقي لإضافة طلب المنتج: **${remainingNet.toLocaleString()}** صافي — حوّل **${remainingGross.toLocaleString()}**:\n` +
+        `\`${remainingCommand}\``,
+      ).catch(() => {});
+      await pointsInteraction.editReply({ content: "✅ تم خصم النقاط. حوّل المبلغ المتبقي من رسالة التذكرة." });
+    },
+  });
+
   await ticketChannel.send({
     content: `<@${userId}> <@${OWNER_ID}>`,
     embeds: [embed],
-    components: [new ActionRowBuilder<ButtonBuilder>().addComponents(closeButton)],
+    components: [
+      new ActionRowBuilder<ButtonBuilder>().addComponents(closeButton),
+      new ActionRowBuilder<ButtonBuilder>().addComponents(pointsPaymentButton(pointsToken)),
+    ],
   });
 
   await interaction.editReply({
@@ -5052,6 +5211,95 @@ client.on(Events.MessageCreate, async (message: Message) => {
 client.on(Events.InteractionCreate, async (interaction: Interaction) => {
   try {
 
+  // ── بوابة الدفع العامة بالنقاط ──────────────────────────────────────────
+  if (interaction.isButton() && interaction.customId.startsWith("points_pay_")) {
+    const token = interaction.customId.replace("points_pay_", "");
+    const request = pointsPaymentRequests.get(token);
+    if (!request || request.userId !== interaction.user.id) {
+      await interaction.reply({ content: "❌ زر الدفع ده انتهى أو مش بتاعك.", flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const balance = await getUserPoints(interaction.user.id);
+    if (balance <= 0) {
+      await interaction.reply({
+        content: `❌ رصيدك الحالي 0 نقطة. استخدم زر الكريدت لإتمام شراء ${request.label}.`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (balance >= request.netPrice) {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      const debit = await debitUserPoints(interaction.user.id, request.netPrice);
+      if (!debit.ok) {
+        await interaction.editReply({ content: "⚠️ الرصيد اتغير قبل تنفيذ العملية. راجع رصيدك وجرب تاني." });
+        return;
+      }
+      pointsPaymentRequests.delete(token);
+      clearTimeout(request.timeoutId);
+      try {
+        await request.onFull(interaction);
+      } catch (err) {
+        await addUserPoints(interaction.user.id, request.netPrice);
+        logger.error({ err, userId: interaction.user.id, label: request.label }, "Points payment completion failed — refunded points");
+        await interaction.editReply({ content: "❌ حصل خطأ أثناء إتمام العملية، وتم إرجاع النقاط لرصيدك. جرب تاني." }).catch(() => {});
+      }
+      return;
+    }
+
+    const partialToken = `${token}_partial`;
+    await interaction.reply({
+      content:
+        `رصيدك **${balance.toLocaleString()} نقطة** وسعر ${request.label} هو **${request.netPrice.toLocaleString()} كريدت صافي**.\n` +
+        `تحب تستخدم كل نقاطك (**${balance.toLocaleString()}**) وتدفع الباقي بالكريدت؟`,
+      components: [
+        new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder().setCustomId(`points_partial_${partialToken}`).setLabel("✅ استخدم نقاطي وادفع الباقي").setStyle(ButtonStyle.Success),
+          new ButtonBuilder().setCustomId(`points_cancel_${partialToken}`).setLabel("❌ لا، كريدت فقط").setStyle(ButtonStyle.Secondary),
+        ),
+      ],
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  if (interaction.isButton() && interaction.customId.startsWith("points_partial_")) {
+    const token = interaction.customId.replace("points_partial_", "").replace(/_partial$/, "");
+    const request = pointsPaymentRequests.get(token);
+    if (!request || request.userId !== interaction.user.id) {
+      await interaction.reply({ content: "❌ طلب الدفع انتهى.", flags: MessageFlags.Ephemeral });
+      return;
+    }
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    const balance = await getUserPoints(interaction.user.id);
+    const points = Math.min(balance, Math.max(0, Math.floor(request.netPrice) - 1));
+    if (points <= 0) {
+      await interaction.editReply({ content: "❌ مفيش نقاط كفاية لاستخدامها في الدفع الجزئي." });
+      return;
+    }
+    const debit = await debitUserPoints(interaction.user.id, points);
+    if (!debit.ok) {
+      await interaction.editReply({ content: "⚠️ الرصيد اتغير قبل تنفيذ العملية. جرب تاني." });
+      return;
+    }
+    pointsPaymentRequests.delete(token);
+    clearTimeout(request.timeoutId);
+    try {
+      await request.onPartial(interaction, points);
+    } catch (err) {
+      await addUserPoints(interaction.user.id, points);
+      logger.error({ err, userId: interaction.user.id, label: request.label }, "Partial points payment failed — refunded points");
+      await interaction.editReply({ content: "❌ حصل خطأ أثناء إتمام الدفع الجزئي، وتم إرجاع النقاط لرصيدك." }).catch(() => {});
+    }
+    return;
+  }
+
+  if (interaction.isButton() && interaction.customId.startsWith("points_cancel_")) {
+    await interaction.reply({ content: "✅ تمام، استخدم زر تحويل الكريدت لإتمام العملية.", flags: MessageFlags.Ephemeral });
+    return;
+  }
+
   // ══════════════════════════════════════════════════════════════════════════
   //  BUTTONS
   // ══════════════════════════════════════════════════════════════════════════
@@ -6194,11 +6442,55 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
       .setLabel("🔒 إلغاء الطلب")
       .setStyle(ButtonStyle.Danger);
 
+    const pointsToken = registerPointsPaymentRequest({
+      userId,
+      netPrice,
+      label: `${cfg.label} × ${qty}`,
+      onFull: async (pointsInteraction) => {
+        const buyer = await getOrCreateUser(userId, interaction.user.username);
+        const balKey =
+          mentionKey === "here" ? "hereBalance" :
+          mentionKey === "everyone" ? "everyoneBalance" :
+          mentionKey === "orders" || mentionKey === "requests" || mentionKey === "here_requests" || mentionKey === "everyone_requests" ? "ordersBalance" :
+          mentionKey === "auction" ? "auctionBalance" : "offersBalance";
+        await db.update(botUsersTable)
+          .set({ [balKey]: buyer[balKey] + qty })
+          .where(eq(botUsersTable.discordUserId, userId));
+        await cancelPendingMentionPurchase(userId, false);
+        await (pointsInteraction.channel as TextChannel | null)?.send(
+          `✅ تم شراء **${cfg.label} × ${qty}** بالكامل بالنقاط وإضافتها لرصيد المنشنات.`,
+        ).catch(() => {});
+        await pointsInteraction.editReply({ content: "✅ تم الخصم وإضافة المنشنات إلى رصيدك." });
+      },
+      onPartial: async (pointsInteraction, points) => {
+        const pending = pendingMentionPurchases.get(userId);
+        if (!pending) {
+          await addUserPoints(userId, points);
+          await pointsInteraction.editReply({ content: "❌ الطلب انتهى، تم إرجاع النقاط لرصيدك." });
+          return;
+        }
+        const remainingNet = Math.max(1, netPrice - points);
+        const remainingGross = calcTransferAmount(remainingNet);
+        pending.netPrice = remainingNet;
+        pending.transferAmt = remainingGross;
+        pending.pointsApplied = points;
+        await (pointsInteraction.channel as TextChannel | null)?.send(
+          `✅ استخدمنا **${points.toLocaleString()} نقطة**.\n` +
+          `المتبقي لشراء المنشنات **${remainingNet.toLocaleString()}** صافي — حوّل **${remainingGross.toLocaleString()}**:\n` +
+          `\`C <@${OWNER_ID}> ${remainingGross}\``,
+        ).catch(() => {});
+        await pointsInteraction.editReply({ content: "✅ تم خصم النقاط. حوّل باقي المبلغ من رسالة التذكرة." });
+      },
+    });
+
     await ticketChannel.send({
       content:    `<@${userId}>`,
       embeds:     [ticketEmbed],
       files:      ticketFiles,
-      components: [new ActionRowBuilder<ButtonBuilder>().addComponents(closeBtn)],
+      components: [
+        new ActionRowBuilder<ButtonBuilder>().addComponents(closeBtn),
+        new ActionRowBuilder<ButtonBuilder>().addComponents(pointsPaymentButton(pointsToken)),
+      ],
     });
 
     await interaction.editReply({ content: `✅ تم إنشاء تذكرة الطلب! <#${ticketChannel.id}>` });
@@ -6279,6 +6571,8 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
 
     const expiresAt = Date.now() + 5 * 60 * 1000; // 5 دقايق
     const timeoutId = setTimeout(async () => {
+      const pending = pendingAucMentionPurchases.get(userId);
+      if (pending) await refundPurchasePoints(userId, pending.pointsApplied);
       pendingAucMentionPurchases.delete(userId);
       await db.update(auctionSchedulesTable)
         .set({ status: "cancelled" })
@@ -6342,11 +6636,76 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
       .setLabel("🔒 إلغاء الطلب")
       .setStyle(ButtonStyle.Danger);
 
+    const pointsTokenAm = registerPointsPaymentRequest({
+      userId,
+      netPrice,
+      label: `منشن إعلان مزاد ${typeCfg.label}`,
+      onFull: async (pointsInteraction) => {
+        const pending = pendingAucMentionPurchases.get(userId);
+        if (!pending) {
+          await pointsInteraction.editReply({ content: "❌ العملية انتهت." });
+          return;
+        }
+        clearTimeout(pending.timeoutId);
+        pendingAucMentionPurchases.delete(userId);
+        const readyTimeoutId = setTimeout(() => pendingAucMentionReady.delete(userId), 10 * 60 * 1000);
+        pendingAucMentionReady.set(userId, {
+          mentionType: mType,
+          guildId: guild.id,
+          ticketChannelId: ticketChannel.id,
+          timeoutId: readyTimeoutId,
+        });
+        await db.update(auctionSchedulesTable).set({
+          status: "awaiting_mention_details",
+          totalPrice: "0",
+          pointsApplied: netPrice,
+        }).where(and(
+          eq(auctionSchedulesTable.id, amRecord.id),
+          eq(auctionSchedulesTable.status, "pending_mention_payment"),
+        ));
+        const detailsBtn = new ButtonBuilder()
+          .setCustomId(`auc_mention_details_btn_${userId}_${mType}`)
+          .setLabel(`${typeCfg.emoji} اختار تفاصيل الإعلان`)
+          .setStyle(ButtonStyle.Primary);
+        await (pointsInteraction.channel as TextChannel | null)?.send({
+          content: `✅ تم الدفع بالكامل بالنقاط. <@${userId}> اضغط الزر لاختيار تفاصيل الإعلان.`,
+          components: [new ActionRowBuilder<ButtonBuilder>().addComponents(detailsBtn)],
+        }).catch(() => {});
+        await pointsInteraction.editReply({ content: "✅ تم الخصم. اختر تفاصيل إعلان المزاد من التذكرة." });
+      },
+      onPartial: async (pointsInteraction, points) => {
+        const pending = pendingAucMentionPurchases.get(userId);
+        if (!pending) {
+          await addUserPoints(userId, points);
+          await pointsInteraction.editReply({ content: "❌ الطلب انتهى، تم إرجاع النقاط لرصيدك." });
+          return;
+        }
+        const remainingNet = Math.max(1, netPrice - points);
+        const remainingGross = calcTransferAmount(remainingNet);
+        pending.netPrice = remainingNet;
+        pending.transferAmt = remainingGross;
+        pending.pointsApplied = points;
+        await db.update(auctionSchedulesTable).set({
+          totalPrice: String(remainingGross),
+          pointsApplied: points,
+        }).where(eq(auctionSchedulesTable.id, amRecord.id));
+        await (pointsInteraction.channel as TextChannel | null)?.send(
+          `✅ استخدمنا **${points.toLocaleString()} نقطة**.\n` +
+          `المتبقي لمنشن إعلان المزاد **${remainingNet.toLocaleString()}** صافي — حوّل **${remainingGross.toLocaleString()}**:\n` +
+          `\`C <@${OWNER_ID}> ${remainingGross}\``,
+        ).catch(() => {});
+        await pointsInteraction.editReply({ content: "✅ تم خصم النقاط. حوّل باقي المبلغ من التذكرة." });
+      },
+    });
+
     await ticketChannel.send({
       content:    `<@${userId}>`,
       embeds:     [amCmdEmbed],
       files:      amCmdFiles,
-      components: [new ActionRowBuilder<ButtonBuilder>().addComponents(closeAmBtn)],
+      components: [
+        new ActionRowBuilder<ButtonBuilder>().addComponents(closeAmBtn),
+        new ActionRowBuilder<ButtonBuilder>().addComponents(pointsPaymentButton(pointsTokenAm)),
+      ],
     });
 
     await interaction.editReply({ content: `✅ تم إنشاء تذكرة الطلب! <#${ticketChannel.id}>` });
@@ -6367,6 +6726,7 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
     if (pendingAm) {
       clearTimeout(pendingAm.timeoutId);
       pendingAucMentionPurchases.delete(ownerIdAm);
+      await refundPurchasePoints(ownerIdAm, pendingAm.pointsApplied);
       await db.update(auctionSchedulesTable)
         .set({ status: "cancelled" })
         .where(eq(auctionSchedulesTable.id, pendingAm.dbRecordId))
@@ -6709,6 +7069,33 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
       expiresAt,
       timeoutId,
     });
+
+    const pointsTokenRename = registerLegacyPointsPayment(
+      pendingStoreRenames.get(userId)!,
+      "تغيير اسم المتجر",
+      async (pointsInteraction) => {
+        const pending = pendingStoreRenames.get(userId);
+        if (!pending) {
+          await pointsInteraction.editReply({ content: "❌ العملية انتهت." });
+          return;
+        }
+        clearTimeout(pending.timeoutId);
+        pendingStoreRenames.delete(userId);
+        pendingStoreRenameReady.set(userId, {
+          purchaseId: pending.purchaseId,
+          roomChannelId: pending.roomChannelId,
+        });
+        const renameActionBtn = new ButtonBuilder()
+          .setCustomId(`open_store_rename_${userId}`)
+          .setLabel("✏️ اكتب الاسم الجديد")
+          .setStyle(ButtonStyle.Primary);
+        await (pointsInteraction.channel as TextChannel | null)?.send({
+          content: `✅ تم الدفع بالكامل بالنقاط يا <@${userId}>.`,
+          components: [new ActionRowBuilder<ButtonBuilder>().addComponents(renameActionBtn)],
+        }).catch(() => {});
+        await pointsInteraction.editReply({ content: "✅ تم الخصم. اكتب الاسم الجديد من زر التذكرة." });
+      },
+    );
     logger.info({ userId, purchaseId, transferAmt }, "Pending store rename created — 2min window");
 
     const DIV_T        = "ـﮩ════════════════ﮩـ";
@@ -6754,7 +7141,11 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
       renameEmbed.setImage("attachment://dragon_text_banner.webp");
     }
 
-    await interaction.editReply({ embeds: [renameEmbed], files: renameFiles });
+    await interaction.editReply({
+      embeds: [renameEmbed],
+      files: renameFiles,
+      components: [new ActionRowBuilder<ButtonBuilder>().addComponents(pointsPaymentButton(pointsTokenRename))],
+    });
     await interaction.followUp({ content: `\`${cmd}\``, flags: MessageFlags.Ephemeral });
     return;
   }
@@ -6829,10 +7220,51 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
       .setLabel("🔒 إلغاء الحجز")
       .setStyle(ButtonStyle.Danger);
 
+    const pointsTokenA = registerPointsPaymentRequest({
+      userId,
+      netPrice: typeCfg.price,
+      label: `حجز مزاد ${typeCfg.label}`,
+      onFull: async (pointsInteraction) => {
+        await db.update(auctionSchedulesTable).set({
+          status: "awaiting_item",
+          totalPrice: "0",
+          pointsApplied: typeCfg.price,
+        }).where(and(
+          eq(auctionSchedulesTable.id, auctionRecord.id),
+          eq(auctionSchedulesTable.status, "pending_payment"),
+        ));
+        await (pointsInteraction.channel as TextChannel | null)?.send(
+          `✅ تم دفع حجز المزاد بالكامل بالنقاط. <@${userId}> اضغط زر إدخال تفاصيل المزاد.`,
+        ).catch(() => {});
+        await pointsInteraction.editReply({ content: "✅ تم الخصم. أدخل تفاصيل المزاد من زر التذكرة." });
+      },
+      onPartial: async (pointsInteraction, points) => {
+        const remainingNet = Math.max(1, typeCfg.price - points);
+        const remainingGross = calcTransferAmount(remainingNet);
+        const remainingCommand = `C <@${OWNER_ID}> ${remainingGross}`;
+        await db.update(auctionSchedulesTable).set({
+          totalPrice: String(remainingGross),
+          pointsApplied: points,
+        }).where(and(
+          eq(auctionSchedulesTable.id, auctionRecord.id),
+          eq(auctionSchedulesTable.status, "pending_payment"),
+        ));
+        await (pointsInteraction.channel as TextChannel | null)?.send(
+          `✅ استخدمنا **${points.toLocaleString()} نقطة**.\n` +
+          `المتبقي لحجز المزاد **${remainingNet.toLocaleString()}** صافي — حوّل **${remainingGross.toLocaleString()}**:\n` +
+          `\`${remainingCommand}\``,
+        ).catch(() => {});
+        await pointsInteraction.editReply({ content: "✅ تم خصم النقاط. حوّل باقي قيمة الحجز من رسالة التذكرة." });
+      },
+    });
+
     await ticketChannel.send({
       content:    `<@${userId}>`,
       embeds:     [ticketEmbed],
-      components: [new ActionRowBuilder<ButtonBuilder>().addComponents(closeBtnA)],
+      components: [
+        new ActionRowBuilder<ButtonBuilder>().addComponents(closeBtnA),
+        new ActionRowBuilder<ButtonBuilder>().addComponents(pointsPaymentButton(pointsTokenA)),
+      ],
     });
 
     await interaction.editReply({ content: `✅ تم إنشاء تذكرة الحجز! <#${ticketChannel.id}>` });
@@ -7164,7 +7596,8 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
     const [aRecord] = await db.select().from(auctionSchedulesTable).where(eq(auctionSchedulesTable.id, auctionId));
     if (!aRecord) { await interaction.editReply({ content: "❌ الحجز مش موجود." }); return; }
 
-    if (aRecord.status === "pending_payment") {
+    if (aRecord.status === "pending_payment" || aRecord.status === "awaiting_item") {
+      await refundPurchasePoints(aRecord.discordUserId, aRecord.pointsApplied);
       await db.update(auctionSchedulesTable).set({ status: "cancelled" }).where(eq(auctionSchedulesTable.id, auctionId));
     }
 
@@ -7304,6 +7737,42 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
       .setEmoji("1524963455797297152")
       .setStyle(ButtonStyle.Success);
 
+    const pointsToken = registerPointsPaymentRequest({
+      userId,
+      netPrice: Math.max(0, Math.round(Number(room.price))),
+      label: `شراء ${room.name}`,
+      onFull: async (pointsInteraction) => {
+        await db.update(purchasesTable).set({
+          status: "awaiting_room_name",
+          totalPrice: "0",
+          transferCommand: null,
+          pointsApplied: Math.max(0, Math.round(Number(room.price))),
+        }).where(eq(purchasesTable.id, purchase.id));
+        await (pointsInteraction.channel as TextChannel | null)?.send(
+          `✅ تم الدفع بالكامل بالنقاط (**${Math.round(Number(room.price)).toLocaleString()} نقطة**).\n` +
+          `<@${userId}> اكتب اسم الروم اللي عايزه هنا ⬇️\n` +
+          `*(بالعربي أو الانجليزي، بدون زخارف أو إيموجيات)*`,
+        ).catch(() => {});
+        await pointsInteraction.editReply({ content: "✅ تم الخصم من نقاطك وبدأ إنشاء المتجر. اكتب اسم الروم في التذكرة." });
+      },
+      onPartial: async (pointsInteraction, points) => {
+        const remainingNet = Math.max(1, Math.round(Number(room.price)) - points);
+        const remainingGross = calcTransferAmount(remainingNet);
+        const remainingCommand = `C <@${OWNER_ID}> ${remainingGross}`;
+        await db.update(purchasesTable).set({
+          totalPrice: String(remainingGross),
+          transferCommand: remainingCommand,
+          pointsApplied: points,
+        }).where(eq(purchasesTable.id, purchase.id));
+        await (pointsInteraction.channel as TextChannel | null)?.send(
+          `✅ استخدمنا **${points.toLocaleString()} نقطة** من رصيدك.\n` +
+          `المتبقي **${remainingNet.toLocaleString()} كريدت صافي** — حوّل **${remainingGross.toLocaleString()}** فقط:\n` +
+          `\`${remainingCommand}\``,
+        ).catch(() => {});
+        await pointsInteraction.editReply({ content: `✅ تم خصم ${points.toLocaleString()} نقطة. حوّل المبلغ المتبقي من رسالة التذكرة.` });
+      },
+    });
+
     const ticketEmbed = new EmbedBuilder()
       .setTitle(`🎟️ تذكرة شراء — ${room.name}`)
       .setDescription(
@@ -7324,7 +7793,10 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
     await ticketChannel.send({
       content:    `<@${userId}>`,
       embeds:     [ticketEmbed],
-      components: [new ActionRowBuilder<ButtonBuilder>().addComponents(getCmdBtn, promoBtn, closeBtn)],
+      components: [
+        new ActionRowBuilder<ButtonBuilder>().addComponents(getCmdBtn, promoBtn, closeBtn),
+        pointsPaymentRow(pointsToken, getCmdBtn),
+      ],
     });
 
     await interaction.editReply({ content: `✅ تم إنشاء تذكرتك! اضغط هنا: <#${ticketChannel.id}>` });
@@ -7682,6 +8154,7 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
       return;
     }
     if (purchase.status === "pending") {
+      await refundPurchasePoints(purchase.discordUserId, purchase.pointsApplied);
       await db
         .update(addonPurchasesTable)
         .set({ status: "cancelled" })
@@ -7753,7 +8226,8 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
     const [purchase] = await db.select().from(purchasesTable).where(eq(purchasesTable.id, purchaseId));
     if (!purchase) { await interaction.editReply({ content: "❌ التذكرة مش موجودة." }); return; }
 
-    if (purchase.status === "pending") {
+    if (purchase.status === "pending" || purchase.status === "awaiting_room_name") {
+      await refundPurchasePoints(purchase.discordUserId, purchase.pointsApplied);
       await db
         .update(purchasesTable)
         .set({ status: "cancelled" })
@@ -7831,7 +8305,11 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
     const transferAmt = calcTransferAmount(WARNING_REMOVAL_PRICE);
     const cmd         = `C <@${OWNER_ID}> ${transferAmt}`;
     const expiresAt   = Date.now() + 5 * 60 * 1000;
-    const timeoutId   = setTimeout(() => { pendingWarningRemovals.delete(userId); }, 5 * 60 * 1000);
+    const timeoutId   = setTimeout(async () => {
+      const pending = pendingWarningRemovals.get(userId);
+      if (pending) await refundPurchasePoints(userId, pending.pointsApplied);
+      pendingWarningRemovals.delete(userId);
+    }, 5 * 60 * 1000);
 
     pendingWarningRemovals.set(userId, {
       userId,
@@ -7844,6 +8322,38 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
       expiresAt,
       timeoutId,
     });
+
+    const pointsTokenW = registerLegacyPointsPayment(
+      pendingWarningRemovals.get(userId)!,
+      "إزالة التحذير",
+      async (pointsInteraction) => {
+        const pending = pendingWarningRemovals.get(userId);
+        if (!pending) {
+          await pointsInteraction.editReply({ content: "❌ العملية انتهت." });
+          return;
+        }
+        clearTimeout(pending.timeoutId);
+        pendingWarningRemovals.delete(userId);
+        const pur = await db.select().from(purchasesTable)
+          .where(eq(purchasesTable.id, pending.purchaseId)).then((r) => r[0]);
+        if (pur) {
+          const newCount = Math.max(0, pur.roomWarningCount - 1);
+          const shouldReactivate = pur.isRoomDeactivated && newCount < 3;
+          await db.update(purchasesTable).set({
+            roomWarningCount: newCount,
+            isRoomDeactivated: shouldReactivate ? false : pur.isRoomDeactivated,
+          }).where(eq(purchasesTable.id, pur.id));
+          const roomCh = interaction.guild?.channels.cache.get(pur.discordRoomId ?? "") as TextChannel | undefined;
+          if (shouldReactivate && roomCh) {
+            await roomCh.permissionOverwrites.edit(pur.discordUserId, {
+              ViewChannel: true, SendMessages: true, MentionEveryone: true,
+            }).catch(() => {});
+          }
+          await roomCh?.send(`✅ <@${userId}> تمت إزالة التحذير بالكامل بالنقاط.`).catch(() => {});
+        }
+        await pointsInteraction.editReply({ content: "✅ تم خصم النقاط وإزالة التحذير." });
+      },
+    );
 
     const DIV_WB = "ـﮩ════════════════ﮩـ";
     const gIWB   = interaction.guild?.iconURL({ extension: "png", size: 256 }) ?? undefined;
@@ -7859,7 +8369,10 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
       )
       .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p", iconURL: gIWB });
 
-    await interaction.editReply({ embeds: [wbEmbed] });
+    await interaction.editReply({
+      embeds: [wbEmbed],
+      components: [new ActionRowBuilder<ButtonBuilder>().addComponents(pointsPaymentButton(pointsTokenW))],
+    });
     return;
   }
 
@@ -7891,7 +8404,11 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
     const reactGross    = calcTransferAmount(reactNet);
     const cmd           = `C <@${OWNER_ID}> ${reactGross}`;
     const expiresAt     = Date.now() + 5 * 60 * 1000;
-    const timeoutId     = setTimeout(() => { pendingRoomReactivations.delete(userId); }, 5 * 60 * 1000);
+    const timeoutId     = setTimeout(async () => {
+      const pending = pendingRoomReactivations.get(userId);
+      if (pending) await refundPurchasePoints(userId, pending.pointsApplied);
+      pendingRoomReactivations.delete(userId);
+    }, 5 * 60 * 1000);
 
     pendingRoomReactivations.set(userId, {
       userId,
@@ -7905,6 +8422,30 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
       timeoutId,
     });
 
+    const pointsTokenR = registerLegacyPointsPayment(
+      pendingRoomReactivations.get(userId)!,
+      "إعادة تفعيل المتجر",
+      async (pointsInteraction) => {
+        const pending = pendingRoomReactivations.get(userId);
+        if (!pending) {
+          await pointsInteraction.editReply({ content: "❌ العملية انتهت." });
+          return;
+        }
+        clearTimeout(pending.timeoutId);
+        pendingRoomReactivations.delete(userId);
+        await db.update(purchasesTable).set({ isRoomDeactivated: false })
+          .where(eq(purchasesTable.id, pending.purchaseId));
+        const roomCh = interaction.guild?.channels.cache.get(pending.roomChannelId) as TextChannel | undefined;
+        if (roomCh) {
+          await roomCh.permissionOverwrites.edit(userId, {
+            ViewChannel: true, SendMessages: true, MentionEveryone: true,
+          }).catch(() => {});
+          await roomCh.send(`✅ <@${userId}> تم إعادة تفعيل متجرك بالكامل بالنقاط.`).catch(() => {});
+        }
+        await pointsInteraction.editReply({ content: "✅ تم خصم النقاط وإعادة تفعيل المتجر." });
+      },
+    );
+
     const reactChannel = interaction.guild?.channels.cache.get(REACTIVATION_CHANNEL_ID) as TextChannel | undefined;
     if (reactChannel) {
       await reactChannel.send(
@@ -7917,6 +8458,7 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
         `✅ تم إرسال أمر التحويل في <#${REACTIVATION_CHANNEL_ID}>\n` +
         `💰 المبلغ: **${reactGross.toLocaleString()}** كريدت\n` +
         `⏳ عندك **5 دقايق** تحول فيهم.`,
+      components: [new ActionRowBuilder<ButtonBuilder>().addComponents(pointsPaymentButton(pointsTokenR))],
     });
     return;
   }
@@ -7951,7 +8493,11 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
     const apGross   = calcTransferAmount(ADD_PARTNER_PRICE);
     const cmd       = `C <@${OWNER_ID}> ${apGross}`;
     const expiresAt = Date.now() + 5 * 60 * 1000;
-    const timeoutId = setTimeout(() => { pendingAddPartners.delete(userId); }, 5 * 60 * 1000);
+    const timeoutId = setTimeout(async () => {
+      const pending = pendingAddPartners.get(userId);
+      if (pending) await refundPurchasePoints(userId, pending.pointsApplied);
+      pendingAddPartners.delete(userId);
+    }, 5 * 60 * 1000);
 
     pendingAddPartners.set(userId, {
       userId,
@@ -7964,6 +8510,30 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
       expiresAt,
       timeoutId,
     });
+
+    const pointsTokenAP = registerLegacyPointsPayment(
+      pendingAddPartners.get(userId)!,
+      "إضافة شريك",
+      async (pointsInteraction) => {
+        const pending = pendingAddPartners.get(userId);
+        if (!pending) {
+          await pointsInteraction.editReply({ content: "❌ العملية انتهت." });
+          return;
+        }
+        clearTimeout(pending.timeoutId);
+        pendingAddPartners.delete(userId);
+        const mentionTimeout = setTimeout(() => awaitingPartnerMention.delete(userId), 5 * 60 * 1000);
+        awaitingPartnerMention.set(userId, {
+          purchaseId: pending.purchaseId,
+          roomChannelId: pending.roomChannelId,
+          guildId: pending.guildId,
+          timeoutId: mentionTimeout,
+        });
+        const roomCh = interaction.guild?.channels.cache.get(pending.roomChannelId) as TextChannel | undefined;
+        await roomCh?.send(`✅ تم الدفع بالنقاط يا <@${userId}>. منشن الشريك الجديد هنا عشان أضيفه للروم.`).catch(() => {});
+        await pointsInteraction.editReply({ content: "✅ تم خصم النقاط. منشن الشريك الجديد في روم متجرك." });
+      },
+    );
 
     // أرسل أمر ProBot في قناة التحويلات
     const apChannel = interaction.guild?.channels.cache.get(REACTIVATION_CHANNEL_ID) as TextChannel | undefined;
@@ -7987,7 +8557,10 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
       .setColor(0x00bfff)
       .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p", iconURL: gIAPB });
 
-    await interaction.editReply({ embeds: [apPayEmbed] });
+    await interaction.editReply({
+      embeds: [apPayEmbed],
+      components: [new ActionRowBuilder<ButtonBuilder>().addComponents(pointsPaymentButton(pointsTokenAP))],
+    });
     return;
   }
 
@@ -8021,7 +8594,11 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
     const rpGross   = calcTransferAmount(REMOVE_PARTNER_PRICE);
     const cmd       = `C <@${OWNER_ID}> ${rpGross}`;
     const expiresAt = Date.now() + 5 * 60 * 1000;
-    const timeoutId = setTimeout(() => { pendingRemovePartners.delete(userId); }, 5 * 60 * 1000);
+    const timeoutId = setTimeout(async () => {
+      const pending = pendingRemovePartners.get(userId);
+      if (pending) await refundPurchasePoints(userId, pending.pointsApplied);
+      pendingRemovePartners.delete(userId);
+    }, 5 * 60 * 1000);
 
     pendingRemovePartners.set(userId, {
       userId,
@@ -8035,6 +8612,28 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
       expiresAt,
       timeoutId,
     });
+
+    const pointsTokenRP = registerLegacyPointsPayment(
+      pendingRemovePartners.get(userId)!,
+      "إزالة الشريك",
+      async (pointsInteraction) => {
+        const pending = pendingRemovePartners.get(userId);
+        if (!pending) {
+          await pointsInteraction.editReply({ content: "❌ العملية انتهت." });
+          return;
+        }
+        clearTimeout(pending.timeoutId);
+        pendingRemovePartners.delete(userId);
+        await db.update(purchasesTable).set({ partnerDiscordUserId: null })
+          .where(eq(purchasesTable.id, pending.purchaseId));
+        const roomCh = interaction.guild?.channels.cache.get(pending.roomChannelId) as TextChannel | undefined;
+        if (roomCh) {
+          await roomCh.permissionOverwrites.delete(pending.partnerId, "Partner removed").catch(() => {});
+          await roomCh.send(`✅ <@${userId}> تمت إزالة الشريك بالكامل بالنقاط.`).catch(() => {});
+        }
+        await pointsInteraction.editReply({ content: "✅ تم خصم النقاط وإزالة الشريك." });
+      },
+    );
 
     const rpChannel = interaction.guild?.channels.cache.get(REACTIVATION_CHANNEL_ID) as TextChannel | undefined;
     if (rpChannel) {
@@ -8057,7 +8656,10 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
       .setColor(0xff4444)
       .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p", iconURL: gIRPB });
 
-    await interaction.editReply({ embeds: [rpPayEmbed] });
+    await interaction.editReply({
+      embeds: [rpPayEmbed],
+      components: [new ActionRowBuilder<ButtonBuilder>().addComponents(pointsPaymentButton(pointsTokenRP))],
+    });
     return;
   }
 
@@ -8087,7 +8689,11 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
     const alGross   = calcTransferAmount(AUTO_LINES_PRICE);
     const cmd       = `C <@${OWNER_ID}> ${alGross}`;
     const expiresAt = Date.now() + 10 * 60 * 1000;
-    const timeoutId = setTimeout(() => { pendingAutoLinePurchases.delete(userId); }, 10 * 60 * 1000);
+    const timeoutId = setTimeout(async () => {
+      const pending = pendingAutoLinePurchases.get(userId);
+      if (pending) await refundPurchasePoints(userId, pending.pointsApplied);
+      pendingAutoLinePurchases.delete(userId);
+    }, 10 * 60 * 1000);
 
     pendingAutoLinePurchases.set(userId, {
       userId,
@@ -8100,6 +8706,37 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
       expiresAt,
       timeoutId,
     });
+
+    const pointsTokenAL = registerLegacyPointsPayment(
+      pendingAutoLinePurchases.get(userId)!,
+      "تلقائي للخطوط",
+      async (pointsInteraction) => {
+        const pending = pendingAutoLinePurchases.get(userId);
+        if (!pending) {
+          await pointsInteraction.editReply({ content: "❌ العملية انتهت." });
+          return;
+        }
+        clearTimeout(pending.timeoutId);
+        pendingAutoLinePurchases.delete(userId);
+        const roomCh = interaction.guild?.channels.cache.get(pending.roomChannelId) as TextChannel | undefined;
+        if (roomCh) {
+          const imageTimeout = setTimeout(() => {
+            pendingAutoLineImages.delete(userId);
+            roomCh.send(`⏰ <@${userId}> انتهت المهلة — ابعت الصورة تاني لو عايز تفعّل الخدمة.`).catch(() => {});
+          }, AUTO_LINES_IMAGE_TIMEOUT_MS);
+          pendingAutoLineImages.set(userId, {
+            userId,
+            purchaseId: pending.purchaseId,
+            roomChannelId: pending.roomChannelId,
+            timeoutId: imageTimeout,
+          });
+          await roomCh.send(
+            `✅ <@${userId}> تم الدفع بالنقاط. ابعت الصورة اللي عايزها تتبعت بعد كل رسالة في متجرك 👇\n*(عندك 10 دقايق)*`,
+          ).catch(() => {});
+        }
+        await pointsInteraction.editReply({ content: "✅ تم خصم النقاط. ابعت صورة الخدمة في روم متجرك." });
+      },
+    );
 
     // منشن في روم الأوامر مع أمر التحويل
     const alChannel = interaction.guild?.channels.cache.get(REACTIVATION_CHANNEL_ID) as TextChannel | undefined;
@@ -8123,7 +8760,10 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
       .setColor(0xf39c12)
       .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p", iconURL: gIALB });
 
-    await interaction.editReply({ embeds: [alPayEmbed] });
+    await interaction.editReply({
+      embeds: [alPayEmbed],
+      components: [new ActionRowBuilder<ButtonBuilder>().addComponents(pointsPaymentButton(pointsTokenAL))],
+    });
     return;
   }
 
@@ -9262,7 +9902,9 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
     }
 
     if (pendingAutoPublishes.has(userId)) clearTimeout(pendingAutoPublishes.get(userId)!.timeoutId);
-    const timeoutId = setTimeout(() => {
+    const timeoutId = setTimeout(async () => {
+      const pending = pendingAutoPublishes.get(userId);
+      if (pending) await refundPurchasePoints(userId, pending.pointsApplied);
       pendingAutoPublishes.delete(userId);
     }, 10 * 60 * 1000);
 
@@ -9280,6 +9922,39 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
       timeoutId,
     });
 
+    const pointsTokenAPub = registerLegacyPointsPayment(
+      pendingAutoPublishes.get(userId)!,
+      `النشر التلقائي لمدة ${days} ${days === 1 ? "يوم" : "أيام"}`,
+      async (pointsInteraction) => {
+        const pending = pendingAutoPublishes.get(userId);
+        if (!pending) {
+          await pointsInteraction.editReply({ content: "❌ العملية انتهت." });
+          return;
+        }
+        clearTimeout(pending.timeoutId);
+        pendingAutoPublishes.delete(userId);
+        pendingAutoPublishReady.set(userId, {
+          storePurchaseId: pending.storePurchaseId,
+          days: pending.days,
+          roomChannelId: pending.roomChannelId,
+        });
+        const yesBtn = new ButtonBuilder()
+          .setCustomId(`autopub_mention_yes_${userId}_${pending.storePurchaseId}_${pending.days}_${pending.roomChannelId}`)
+          .setLabel("✅ أيوه استخدم منشناتي")
+          .setStyle(ButtonStyle.Success);
+        const noBtn = new ButtonBuilder()
+          .setCustomId(`autopub_mention_no_${userId}_${pending.storePurchaseId}_${pending.days}_${pending.roomChannelId}`)
+          .setLabel("❌ لأ بدون منشنات")
+          .setStyle(ButtonStyle.Secondary);
+        const roomCh = interaction.guild?.channels.cache.get(pending.roomChannelId) as TextChannel | undefined;
+        await roomCh?.send({
+          content: `✅ <@${userId}> تم الدفع بالكامل بالنقاط. تحب تستخدم رصيد منشناتك مع كل نشرة؟`,
+          components: [new ActionRowBuilder<ButtonBuilder>().addComponents(yesBtn, noBtn)],
+        }).catch(() => {});
+        await pointsInteraction.editReply({ content: "✅ تم الخصم. راجع روم متجرك لاختيار طريقة المنشن." });
+      },
+    );
+
     const DIV_DS  = "ـﮩ════════════════ﮩـ";
     const gIDS    = interaction.guild?.iconURL({ extension: "png", size: 256 }) ?? undefined;
     const dsEmbed = new EmbedBuilder()
@@ -9295,7 +9970,10 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
       )
       .setFooter({ text: "Dev By : mostafa9321 & ahmed_.p", iconURL: gIDS });
 
-    await interaction.editReply({ embeds: [dsEmbed] });
+    await interaction.editReply({
+      embeds: [dsEmbed],
+      components: [new ActionRowBuilder<ButtonBuilder>().addComponents(pointsPaymentButton(pointsTokenAPub))],
+    });
     return;
   }
 
