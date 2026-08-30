@@ -4297,6 +4297,37 @@ client.on(Events.MessageCreate, async (message: Message) => {
   const content  = message.content;
   const channel  = message.channel as TextChannel;
 
+  // ── !add — إضافة نقاط لمستخدم (للأونر والأدمنستراتور فقط) ───────────────
+  // الصيغة: !add @user 500
+  if (/^!add(?:\s|$)/i.test(content.trim())) {
+    const isAdministrator = userId === OWNER_ID ||
+      message.member?.permissions.has(PermissionFlagsBits.Administrator) === true;
+    if (!isAdministrator) {
+      await message.reply({ content: "❌ الأمر ده للأونر أو للأعضاء اللي معاهم Administrator فقط." }).catch(() => {});
+      return;
+    }
+
+    const targetUser = message.mentions.users.first();
+    const amountToken = content.trim().split(/\s+/)
+      .find((token) => /^\d[\d,]*$/.test(token));
+    const amount = amountToken ? Number(amountToken.replace(/,/g, "")) : NaN;
+
+    if (!targetUser || targetUser.bot || !Number.isSafeInteger(amount) || amount <= 0 || amount > 1_000_000_000) {
+      await message.reply({
+        content: "❌ الاستخدام الصحيح: `!add @الشخص 500`\nالمبلغ لازم يكون رقمًا صحيحًا من 1 إلى 1,000,000,000، ولا يمكن إضافة نقاط للبوتات.",
+      }).catch(() => {});
+      return;
+    }
+
+    const newBalance = await addUserPoints(targetUser.id, amount);
+    await message.reply({
+      content:
+        `✅ تمت إضافة **${amount.toLocaleString()} نقطة** إلى <@${targetUser.id}>.\n` +
+        `💠 الرصيد الجديد: **${newBalance.toLocaleString()} نقطة**.`,
+    }).catch(() => {});
+    return;
+  }
+
   // ── !تشفير — إمبيد صغير في نفس الشانل، يتمسح أوتوماتيك بعد الاستخدام ────
   if (content.trim() === "!تشفير") {
     // امسح رسالة الأمر بهدوء
